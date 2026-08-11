@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Book Haven Bookstore - Gallery</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+    <!-- Header Section -->
+    <header>
+        <img src="images/logo.png" alt="Book Haven Bookstore Logo" width="80">
+        <h1>Book Haven Bookstore</h1>
+        <nav>
+            <a href="index.html">Home</a>
+            <a href="gallery.html">Gallery</a>
+            <a href="about.html">About Us / Contact</a>
+            <a href="events.html">Events &amp; Community</a>
+        </nav>
+    </header>
+
+    <!-- Main Content -->
+    <main>
+
+        <h2>Our Products</h2>
+
+        <!-- Cart Summary -->
+        <div class="cart-summary">
+            <span id="cart-count">Items in Cart: 0</span>
+            <button id="view-cart-btn">View Cart</button>
+        </div>
+
+        <table class="gallery-table">
+            <!-- Row 1 -->
+            <tr>
+                <td align="center" data-id="1" data-name="Brie Mine 4Ever" data-price="14.99">
+                    <img src="images/brie-mine-4ever.jpg" alt="Brie Mine 4Ever book" width="150">
+                    <p><strong>Brie Mine 4Ever</strong></p>
+                    <p class="product-price">$14.99</p>
+                    <p>A delightful book for cheese lovers featuring recipes and stories.</p>
+                    <button class="add-to-cart-btn" data-id="1" data-name="Brie Mine 4Ever" data-price="14.99">Add to Cart</button>
+                </td>
+                <td align="center" data-id="2" data-name="Glory Riders" data-price="16.99">
+                    <img src="images/glory-riders.jpg" alt="Glory Riders book" width="150">
+                    <p><strong>Glory Riders</strong></p>
+                    <p class="product-price">$16.99</p>
+                    <p>An exciting tale about bikers on an epic cross-country journey.</p>
+                    <button class="add-to-cart-btn" data-id="2" data-name="Glory Riders" data-price="16.99">Add to Cart</button>
+                </td>
+                <td align="center" data-id="3" data-name="Sorcerer's Shadowed Chronicles" data-price="18.99">
+                    <img src="images/sorcerers-shadowed-chronicles.jpg" alt="Sorcerer's Shadowed Chronicles book" width="150">
+                    <p><strong>Sorcerer's Shadowed Chronicles</strong></p>
+                    <p class="product-price">$18.99</p>
+                    <p>A gripping fantasy adventure filled with magic and mystery.</p>
+                    <button class="add-to-cart-btn" data-id="3" data-name="Sorcerer's Shadowed Chronicles" data-price="18.99">Add to Cart</button>
+                </td>
+            </tr>
+            <!-- Row 2 -->
+            <tr>
+                <td align="center" data-id="4" data-name="Ball Magazine" data-price="7.99">
+                    <img src="images/ball-magazine.jpg" alt="Ball magazine" width="150">
+                    <p><strong>Ball Magazine</strong></p>
+                    <p class="product-price">$7.99</p>
+                    <p>The ultimate magazine for pickleball enthusiasts of all levels.</p>
+                    <button class="add-to-cart-btn" data-id="4" data-name="Ball Magazine" data-price="7.99">Add to Cart</button>
+                </td>
+                <td align="center" data-id="5" data-name="Travel Magazine" data-price="8.99">
+                    <img src="images/travel-magazine.jpg" alt="Travel magazine" width="150">
+                    <p><strong>Travel Magazine</strong></p>
+                    <p class="product-price">$8.99</p>
+                    <p>A magazine for travelers seeking inspiration and destination guides.</p>
+                    <button class="add-to-cart-btn" data-id="5" data-name="Travel Magazine" data-price="8.99">Add to Cart</button>
+                </td>
+                <td align="center" data-id="6" data-name="Eat. Magazine" data-price="9.99">
+                    <img src="images/eat-magazine.jpg" alt="Eat magazine" width="150">
+                    <p><strong>Eat. Magazine</strong></p>
+                    <p class="product-price">$9.99</p>
+                    <p>A foodie magazine packed with recipes, reviews, and culinary trends.</p>
+                    <button class="add-to-cart-btn" data-id="6" data-name="Eat. Magazine" data-price="9.99">Add to Cart</button>
+                </td>
+            </tr>
+            <!-- Row 3 -->
+            <tr>
+                <td align="center" data-id="7" data-name="Canvas Tote Bag" data-price="24.99">
+                    <img src="images/tote-bag.jpg" alt="Canvas tote bag" width="150">
+                    <p><strong>Canvas Tote Bag</strong></p>
+                    <p class="product-price">$24.99</p>
+                    <p>Stylish tote bag with "ALL I DO IS READ READ READ" lettering.</p>
+                    <button class="add-to-cart-btn" data-id="7" data-name="Canvas Tote Bag" data-price="24.99">Add to Cart</button>
+                </td>
+                <td align="center" data-id="8" data-name="Book Haven Notebook" data-price="12.99">
+                    <img src="images/notebook.jpg" alt="Book Haven notebook" width="150">
+                    <p><strong>Book Haven Notebook</strong></p>
+                    <p class="product-price">$12.99</p>
+                    <p>A premium notebook featuring the Book Haven Bookstore name on the cover.</p>
+                    <button class="add-to-cart-btn" data-id="8" data-name="Book Haven Notebook" data-price="12.99">Add to Cart</button>
+                </td>
+                <td align="center" data-id="9" data-name="Reading Stickers (Set of 4)" data-price="5.99">
+                    <img src="images/stickers.jpg" alt="Book Haven stickers" width="150">
+                    <p><strong>Reading Stickers (Set of 4)</strong></p>
+                    <p class="product-price">$5.99</p>
+                    <p>A fun set of four Book Haven Bookstore stickers that promote reading.</p>
+                    <button class="add-to-cart-btn" data-id="9" data-name="Reading Stickers (Set of 4)" data-price="5.99">Add to Cart</button>
+                </td>
+            </tr>
+        </table>
+
+        <!-- Cart Action Buttons -->
+        <div class="cart-actions">
+            <button id="clear-cart-btn">Clear Cart</button>
+            <button id="process-order-btn">Process Order</button>
+        </div>
+
+    </main>
+
+    <!-- Cart Modal -->
+    <div id="cart-modal" class="cart-modal">
+        <div class="cart-modal-content">
+            <span class="close-btn" id="close-cart-btn">&times;</span>
+            <h2>Your Shopping Cart</h2>
+            <div id="cart-items-container">
+                <p id="empty-cart-message">Your cart is empty.</p>
+            </div>
+            <div id="cart-total" style="display: none;">
+                <p><strong>Total: $<span id="total-amount">0.00</span></strong></p>
+            </div>
+            <div class="cart-modal-actions">
+                <button id="modal-clear-cart-btn">Clear Cart</button>
+                <button id="modal-process-order-btn">Process Order</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer Section -->
+    <footer>
+        <div>
+            <h3>Subscribe to Our Newsletter</h3>
+            <form id="subscribe-form">
+                <input type="email" name="email" placeholder="Enter your email address" required>
+                <button type="submit" id="subscribe-btn">Subscribe</button>
+            </form>
+        </div>
+        <div>
+            <h3>Follow Us</h3>
+            <a href="#">Facebook</a>
+            <a href="#">Instagram</a>
+            <a href="#">Twitter</a>
+        </div>
+        <nav>
+            <a href="index.html">Home</a>
+            <a href="gallery.html">Gallery</a>
+            <a href="about.html">About Us / Contact</a>
+            <a href="events.html">Events &amp; Community</a>
+        </nav>
+        <p>&copy; 2026 Book Haven Bookstore. All rights reserved.</p>
+    </footer>
+
+    <!-- JavaScript for Gallery Page with sessionStorage -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // ===== SESSIONSTORAGE SHOPPING CART FUNCTIONALITY =====
+
+            // Helper function to get cart from sessionStorage
+            function getCart() {
+                var cart = sessionStorage.getItem('bookHavenCart');
+                return cart ? JSON.parse(cart) : [];
+            }
+
+            // Helper function to save cart to sessionStorage
+            function saveCart(cart) {
+                sessionStorage.setItem('bookHavenCart', JSON.stringify(cart));
+            }
+
+            // Helper function to update cart count display
+            function updateCartCount() {
+                var cart = getCart();
+                var count = cart.length;
+                document.getElementById('cart-count').textContent = 'Items in Cart: ' + count;
+            }
+
+            // Helper function to calculate total price
+            function calculateTotal() {
+                var cart = getCart();
+                var total = 0;
+                cart.forEach(function(item) {
+                    total += parseFloat(item.price);
+                });
+                return total.toFixed(2);
+            }
+
+            // Function to display cart items in modal
+            function displayCartItems() {
+                var cart = getCart();
+                var container = document.getElementById('cart-items-container');
+                var emptyMessage = document.getElementById('empty-cart-message');
+                var totalDiv = document.getElementById('cart-total');
+
+                // Clear existing items (except empty message)
+                var existingItems = container.querySelectorAll('.cart-item');
+                existingItems.forEach(function(item) {
+                    item.remove();
+                });
+
+                if (cart.length === 0) {
+                    emptyMessage.style.display = 'block';
+                    totalDiv.style.display = 'none';
+                } else {
+                    emptyMessage.style.display = 'none';
+                    totalDiv.style.display = 'block';
+
+                    cart.forEach(function(item, index) {
+                        var itemDiv = document.createElement('div');
+                        itemDiv.className = 'cart-item';
+                        itemDiv.innerHTML =
+                            '<p><strong>' + item.name + '</strong> - $' + item.price +
+                            ' <button class="remove-item-btn" data-index="' + index + '">Remove</button></p>';
+                        container.appendChild(itemDiv);
+                    });
+
+                    // Update total
+                    document.getElementById('total-amount').textContent = calculateTotal();
+
+                    // Add event listeners to remove buttons
+                    var removeButtons = document.querySelectorAll('.remove-item-btn');
+                    removeButtons.forEach(function(button) {
+                        button.addEventListener('click', function() {
+                            var index = parseInt(this.getAttribute('data-index'));
+                            removeFromCart(index);
+                        });
+                    });
+                }
+            }
+
+            // Function to add item to cart
+            function addToCart(id, name, price) {
+                var cart = getCart();
+                cart.push({ id: id, name: name, price: price });
+                saveCart(cart);
+                updateCartCount();
+                alert('Item added to the cart: ' + name + ' ($' + price + ')');
+            }
+
+            // Function to remove item from cart
+            function removeFromCart(index) {
+                var cart = getCart();
+                if (index >= 0 && index < cart.length) {
+                    var removedItem = cart[index];
+                    cart.splice(index, 1);
+                    saveCart(cart);
+                    updateCartCount();
+                    displayCartItems();
+                    alert('Removed from cart: ' + removedItem.name);
+                }
+            }
+
+            // Function to clear cart
+            function clearCart() {
+                sessionStorage.removeItem('bookHavenCart');
+                updateCartCount();
+                displayCartItems();
+                alert('Cart cleared.');
+            }
+
+            // Function to process order
+            function processOrder() {
+                var cart = getCart();
+                if (cart.length === 0) {
+                    alert('Your cart is empty. Please add items before processing your order.');
+                } else {
+                    var total = calculateTotal();
+                    sessionStorage.removeItem('bookHavenCart');
+                    updateCartCount();
+                    displayCartItems();
+                    alert('Thank you for your order! Total amount: $' + total);
+                }
+            }
+
+            // ===== EVENT LISTENERS =====
+
+            // Add to Cart buttons click event
+            var addToCartButtons = document.querySelectorAll('.add-to-cart-btn');
+            addToCartButtons.forEach(function(button) {
+                button.addEventListener('click', function() {
+                    var id = this.getAttribute('data-id');
+                    var name = this.getAttribute('data-name');
+                    var price = this.getAttribute('data-price');
+                    addToCart(id, name, price);
+                });
+            });
+
+            // View Cart button click event
+            var viewCartBtn = document.getElementById('view-cart-btn');
+            var cartModal = document.getElementById('cart-modal');
+            viewCartBtn.addEventListener('click', function() {
+                displayCartItems();
+                cartModal.style.display = 'block';
+            });
+
+            // Close modal button
+            var closeCartBtn = document.getElementById('close-cart-btn');
+            closeCartBtn.addEventListener('click', function() {
+                cartModal.style.display = 'none';
+            });
+
+            // Close modal when clicking outside
+            window.addEventListener('click', function(event) {
+                if (event.target === cartModal) {
+                    cartModal.style.display = 'none';
+                }
+            });
+
+            // Clear Cart button (main page)
+            var clearCartBtn = document.getElementById('clear-cart-btn');
+            clearCartBtn.addEventListener('click', function() {
+                clearCart();
+            });
+
+            // Process Order button (main page)
+            var processOrderBtn = document.getElementById('process-order-btn');
+            processOrderBtn.addEventListener('click', function() {
+                processOrder();
+            });
+
+            // Clear Cart button (modal)
+            var modalClearCartBtn = document.getElementById('modal-clear-cart-btn');
+            modalClearCartBtn.addEventListener('click', function() {
+                clearCart();
+            });
+
+            // Process Order button (modal)
+            var modalProcessOrderBtn = document.getElementById('modal-process-order-btn');
+            modalProcessOrderBtn.addEventListener('click', function() {
+                processOrder();
+            });
+
+            // Subscribe button click event
+            var subscribeForm = document.getElementById('subscribe-form');
+            subscribeForm.addEventListener('submit', function(event) {
+                event.preventDefault();
+                alert("Thank you for subscribing.");
+            });
+
+            // Initialize cart count on page load
+            updateCartCount();
+        });
+    </script>
+
+</body>
+</html>

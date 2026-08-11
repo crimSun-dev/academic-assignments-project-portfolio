@@ -1,0 +1,951 @@
+OS MEMORY MANAGEMENT PROJECT - DRAVEN CHEN
+====================================================
+
+########## REPORT.md ##########
+# OS Memory Management Project — COMP2306
+
+**Total memory:** 20 KB &nbsp;|&nbsp; **Page size:** 1 KB &nbsp;|&nbsp; **Frames:** 20
+
+Memory is modeled as 20 one-KB frames. A job's request for *N* KB requires *N*
+contiguous free frames (contiguous allocation over a paged frame table — the
+common simplification used when a fit algorithm, rather than a frame-mapping
+page table, is being taught). Three function categories were implemented in
+`memsim.py`:
+
+| Category | Function(s) |
+|---|---|
+| **Allocation** | `allocate_first_fit`, `allocate_best_fit`, `allocate_worst_fit` — each scans `free_runs(frames)` and returns the starting frame index chosen by that policy |
+| **Deallocation**| `deallocate` — clears every frame owned by a finishing/sleeping job |
+| **Replacement** | `compact` — a relocation ("memory compaction") routine invoked automatically whenever a request fails *only* because free space is fragmented (enough total free KB exists, just not contiguously); it slides all resident jobs down to frame 0, coalesces every free frame into one block at the top of memory, and the allocator retries |
+
+A job that still can't be placed after compaction (not enough *total* free
+memory) is pushed onto a FIFO wait queue and retried every time another job
+departs. Every row of a job table is treated as an independent job
+**instance** — even when an ID repeats with a different size/interval later
+(e.g., job 9 appears three times in Part 3) — since a "Sleep" state is
+modeled as the OS swapping the job's memory back out (a real scheduler would
+not keep a sleeping process pinned in RAM indefinitely); this is why the same
+ID can return later needing a fresh allocation.
+
+---
+
+## Part 1 & 2 — First job table (7 jobs)
+
+Simulation input (`table1_jobs.txt`):
+
+| Job | Start | Size | Interval | End state |
+|---|---|---|---|---|
+| 1 | 1 | 2 | 7 | End |
+| 2 | 2 | 3 | 8 | Sleep |
+| 3 | 3 | 4 | 6 | End |
+| 4 | 4 | 3 | 6 | Sleep |
+| 5 | 5 | 2 | 9 | Sleep |
+| 6 | 6 | 3 | 6 | Sleep |
+| 7 | 7 | 2 | 6 | Sleep |
+
+Ran under all three strategies (`table1_first-fit.log`, `table1_best-fit.log`,
+`table1_worst-fit.log`). Result — **identical for all three**:
+
+| Metric | First-Fit | Best-Fit | Worst-Fit |
+|---|---|---|---|
+| Jobs delayed | 0 | 0 | 0 |
+| Total wait time | 0s | 0s | 0s |
+| Compactions | 0 | 0 | 0 |
+| Peak memory used | 19/20 KB (t=7) | 19/20 KB (t=7) | 19/20 KB (t=7) |
+| Avg. utilization | 45.7% | 45.7% | 45.7% |
+
+**Analysis / which choice is best:** With only 7 small jobs arriving one at a
+time and a combined peak demand of 19 KB (one frame to spare), every strategy
+finds a fit on the first try — there is never enough contention to make the
+*choice* of block matter. In this narrow case **First-Fit is the best
+practical choice**, not because it produces a better outcome here (they tie),
+but because it is O(n) in the common case (stops at the first suitable hole)
+versus Best-Fit/Worst-Fit, which must scan every free run to find the
+smallest/largest one — extra work that buys nothing when memory pressure is
+this low. Best-Fit's usual advantage (minimizing leftover slivers) and
+Worst-Fit's usual advantage (leaving a large reusable remainder) only pay off
+once jobs start actually competing for the same holes, which doesn't happen
+in Part 2's table — it does happen in Part 3 (see below).
+
+**Linux vs. Windows impact on the ending memory state:** Neither OS actually
+manages RAM with a "first/best/worst-fit on a flat array" scheme — that model
+is a teaching simplification of *contiguous* allocation. Real systems both
+use **paging**, but they arrive at a different ending memory state for
+reasons outside job size/interval alone:
+
+- **Linux** uses a demand-paged buddy allocator for physical pages and a slab
+  allocator for kernel objects; user pages backing a *sleeping* process
+  (e.g., jobs 2, 4, 5, 6, 7 above) are **not necessarily freed** — they stay
+  resident until the kernel's page reclaim / `kswapd` decides there is memory
+  pressure, at which point clean pages are dropped and dirty pages are
+  written to swap. So the "ending memory state" on Linux would likely show
+  those sleeping jobs *still occupying frames*, unlike this simulation, which
+  eagerly deallocates on Sleep.
+- **Windows** tracks each process's *working set* and trims it under memory
+  pressure via the Working Set Manager; a sleeping/idle process's pages are
+  more aggressively moved to the standby/modified list (and can be reused
+  immediately by another process, similar to this simulation's eager
+  deallocation) even without a true low-memory condition, because Windows
+  optimizes for perceived responsiveness of the foreground app.
+- Net effect: given identical timings, **Linux would tend to end the run with
+  a higher resident/used-memory footprint** (idle processes kept warm),
+  while **Windows would tend to end closer to this simulation's eager-free
+  model** (idle processes trimmed sooner). Neither difference changes *how
+  much* memory a job needs, only *when* frames are actually released back to
+  the free pool, so a real Linux trace of this workload would show fuller
+  memory for longer than the Windows trace or this simulator.
+
+---
+
+## Part 3 — Second job table (20 job instances), 3 scenarios
+
+Input: `table2_jobs.txt`. Ran once per strategy: `table2_first-fit.log`,
+`table2_best-fit.log`, `table2_worst-fit.log`.
+
+### Where contention actually happens
+At **t = 13**, four jobs (2, 4, 13, 7) all arrive at once while jobs 9, 10,
+11, 12 (already running) occupy the memory — total demand momentarily exceeds
+20 KB, so under *every* strategy jobs 4, 13, and 7 are queued (WAIT) and
+admitted only as jobs 11/others depart:
+
+```
+t=13 | WAIT | job 4  needs 3KB -> no fit, queued (free=0KB)
+t=13 | WAIT | job 13 needs 5KB -> no fit, queued (free=0KB)
+t=13 | WAIT | job 7  needs 2KB -> no fit, queued (free=0KB)
+t=14 | ADMIT-WQ | job 4  (waited 1s)
+t=14 | ADMIT-WQ | job 7  (waited 1s)
+t=17 | ADMIT-WQ | job 13 (waited 4s)
+```
+A second, smaller wait happens at **t = 28** (job 9 waits 2s for job 12/8 to
+free space).
+
+### Result comparison
+
+| Metric | First-Fit | Best-Fit | Worst-Fit |
+|---|---|---|---|
+| Total simulated span | 48s | 48s | 48s |
+| Jobs delayed | 4 | 4 | 4 |
+| Total wait time | 8s | 8s | 8s |
+| Compactions triggered | 0 | 0 | 0 |
+| Avg. memory utilization | 10.12 KB (50.6%) | 10.12 KB (50.6%) | 10.12 KB (50.6%) |
+| Jobs stuck waiting at end | 0 | 0 | 0 |
+
+**The wait/utilization numbers tie across all three strategies** — because
+the wait at t=13 is caused by a genuine lack of *total* free memory (0 KB
+free), not fragmentation, so no fit algorithm can avoid it; a smarter
+placement can't conjure KB that don't exist. What *does* differ is **where**
+each strategy puts jobs in memory (verified by diffing the logs), which
+matters for fragmentation resilience on a longer-running or more irregular
+workload:
+
+- **First-Fit** packs jobs toward low addresses (frame 0 upward), e.g. job 5
+  lands at frame 5, job 4 at frame 7 — leaving fragmented gaps behind
+  quickly-departing large jobs.
+- **Best-Fit** tucks small jobs into the smallest sufficient leftover hole
+  (e.g., job 5 at frame 16, filling a slim gap exactly), which minimizes
+  wasted slivers but tends to create many small, hard-to-reuse holes over
+  time.
+- **Worst-Fit** deliberately uses the *largest* available hole (e.g., job 4
+  placed at frame 16 in the big remaining block), which leaves the largest
+  possible leftover chunk for the next arrival, reducing the odds of
+  needing compaction on a longer trace.
+
+**Recommendation for this workload:** **First-Fit**, for the same reason as
+Part 1 — it ties on every measured outcome while being cheapest to compute,
+and the dataset's job sizes (2–6 KB) relative to 20 KB total memory never
+produce fragmentation severe enough for Best-Fit's tighter packing or
+Worst-Fit's larger-remainder strategy to pay off. Best-Fit would become
+preferable if the workload had many more small, similarly-sized jobs
+competing for the same holes; Worst-Fit would become preferable on a longer
+trace with wildly varying job sizes, where preserving one large reusable
+block matters more than packing tightly.
+
+### Concrete evidence the three allocators really do place jobs differently
+
+Diffing `table2_first-fit.log` against `table2_best-fit.log` and
+`table2_worst-fit.log` (both included) shows the exact same jobs landing in
+different frames at t = 33–38, even though the timing/utilization summary
+ties:
+
+```
+First-Fit  t=33  job 5 (2KB) -> frame 5   mem[9999955...222222....]
+Best-Fit   t=33  job 5 (2KB) -> frame 16  mem[99999.....22222255..]
+Worst-Fit  t=34  job 4 (3KB) -> frame 16  mem[9999955...222222444.]
+First-Fit  t=34  job 4 (3KB) -> frame 7   mem[9999955444222222....]
+```
+
+First-Fit drops job 5 into the *first* hole it finds (right after job 9,
+frame 5), while Best-Fit skips past that same hole and finds a *tighter*
+2-KB gap further up memory (frame 16) that fits job 5 exactly with zero
+waste. Worst-Fit does the opposite — it deliberately grabs the *largest*
+available run (the block starting at frame 16) even though a smaller one was
+available, to keep one big reusable region intact. This is the real,
+measurable difference between the three policies; it just doesn't happen to
+change *wait time* on this particular dataset, because no subsequent
+arrival's failure in this trace is caused by fragmentation rather than a
+genuine lack of total free KB.
+
+### Demonstrating the replacement (compaction) function firing
+
+Because `compact()` never had a chance to trigger on the assignment's own
+tables (every wait in Part 2/3 was caused by zero total free memory, not
+fragmentation), a small purpose-built test case (`table3_fragmentation_demo.txt`,
+`table3_first-fit.log`) was added to prove the replacement function actually
+works:
+
+| Job | Start | Size | Interval | End state |
+|---|---|---|---|---|
+| A | 1 | 6 | 10 | End |
+| B | 1 | 4 | 5 | Sleep |
+| C | 1 | 6 | 10 | End |
+| D | 1 | 2 | 5 | Sleep |
+| E | 6 | 6 | 5 | End |
+
+A, B, C, D are placed back-to-back at t=1 (`AAAAAABBBBCCCCCCDD..`). At t=6,
+B and D depart, leaving two separate 4-KB-and-smaller holes
+(`AAAAAA....CCCCCC....`) — 8 KB free in total, but split into two blocks with
+no single run ≥ 6 KB. Job E then arrives needing 6 KB:
+
+```
+t= 6 | DEPART D  | mem[AAAAAA....CCCCCC....] used=12/20KB free= 8KB
+t= 6 | COMPACT   | memory defragmented -> AAAAAACCCCCC........
+t= 6 | ARRIVE    | job E needs 6KB placed @frame12 -> depart t=11 (End)
+t= 6 | IN-MEM E  | mem[AAAAAACCCCCCEEEEEE..] used=18/20KB free= 2KB
+```
+
+`allocate_first_fit`/`allocate_best_fit`/`allocate_worst_fit` all fail to
+find a run ≥ 6 KB → `compact()` slides A and C down to close the gap left by
+B → the retry succeeds and E is placed immediately with **zero added wait**.
+This confirms the replacement routine is not just present in code but
+actually changes the simulation outcome when triggered.
+
+---
+
+## Files produced
+
+- `memsim.py` — simulator source (allocation / deallocation / replacement functions)
+- `table1_jobs.txt`, `table2_jobs.txt` — input data transcribed from the assignment tables
+- `table1_first-fit.log`, `table1_best-fit.log`, `table1_worst-fit.log` — Part 2 run, memory state at every event
+- `table2_first-fit.log`, `table2_best-fit.log`, `table2_worst-fit.log` — Part 3 runs, one per scenario
+- `table3_fragmentation_demo.txt`, `table3_first-fit.log` — small supplementary test case built to force
+  external fragmentation and prove the `compact()` replacement function actually fires and works
+
+########## memsim.py ##########
+"""
+memsim.py
+---------
+Operating Systems - Memory Management Simulation
+
+Simulates a fixed-partition/paged memory space of TOTAL_KB, divided into
+PAGE_KB-sized frames, being allocated to arriving jobs using one of three
+contiguous free-space allocation strategies: First-Fit, Best-Fit, Worst-Fit.
+
+Three categories of memory-management functions are implemented, as required
+by the assignment rubric:
+  1. ALLOCATION   -> allocate_first_fit / allocate_best_fit / allocate_worst_fit
+  2. DEALLOCATION -> deallocate
+  3. REPLACEMENT  -> compact (a defragmentation / relocation "replacement"
+                      routine that is invoked whenever a job cannot be placed
+                      because free space is fragmented, even though enough
+                      total free space exists)
+
+A job that cannot be placed at all (not enough TOTAL free memory) is put in
+a FIFO wait queue and retried every time memory is freed (a departure event).
+
+Every job row in the input table is treated as an independent job *instance*
+(keyed by (ID, start_time)) because required size/interval differ between
+repeated IDs in Part 3 -- this models a process that was swapped out while
+"Sleeping" and is later re-admitted/rescheduled with a fresh memory request.
+"""
+
+import heapq
+import sys
+from dataclasses import dataclass, field
+
+TOTAL_KB = 20
+PAGE_KB = 1
+NUM_FRAMES = TOTAL_KB // PAGE_KB
+
+
+@dataclass
+class Job:
+    jid: str
+    start: int
+    size: int          # in KB / frames
+    interval: int
+    end_state: str      # "End" or "Sleep"
+    instance: int = 0   # disambiguates repeated IDs
+
+    @property
+    def key(self):
+        return f"{self.jid}@{self.start}"
+
+
+def load_jobs(path):
+    jobs = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            jid, start, size, interval, state = line.split(",")
+            jobs.append(Job(jid, int(start), int(size), int(interval), state))
+    return jobs
+
+
+# ---------------------------------------------------------------------------
+# 1. ALLOCATION FUNCTIONS
+# ---------------------------------------------------------------------------
+
+def free_runs(frames):
+    """Return list of (start_index, length) for every contiguous run of free frames."""
+    runs = []
+    i = 0
+    n = len(frames)
+    while i < n:
+        if frames[i] is None:
+            j = i
+            while j < n and frames[j] is None:
+                j += 1
+            runs.append((i, j - i))
+            i = j
+        else:
+            i += 1
+    return runs
+
+
+def allocate_first_fit(frames, size):
+    for start, length in free_runs(frames):
+        if length >= size:
+            return start
+    return None
+
+
+def allocate_best_fit(frames, size):
+    candidates = [(length, start) for start, length in free_runs(frames) if length >= size]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: (t[0], t[1]))  # smallest sufficient block first
+    return candidates[0][1]
+
+
+def allocate_worst_fit(frames, size):
+    candidates = [(length, start) for start, length in free_runs(frames) if length >= size]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: (-t[0], t[1]))  # largest block first
+    return candidates[0][1]
+
+
+ALLOCATORS = {
+    "first-fit": allocate_first_fit,
+    "best-fit": allocate_best_fit,
+    "worst-fit": allocate_worst_fit,
+}
+
+
+def place(frames, start, size, job_key):
+    for i in range(start, start + size):
+        frames[i] = job_key
+
+
+# ---------------------------------------------------------------------------
+# 2. DEALLOCATION FUNCTION
+# ---------------------------------------------------------------------------
+
+def deallocate(frames, job_key):
+    freed = 0
+    for i in range(len(frames)):
+        if frames[i] == job_key:
+            frames[i] = None
+            freed += 1
+    return freed
+
+
+# ---------------------------------------------------------------------------
+# 3. REPLACEMENT / COMPACTION FUNCTION
+# ---------------------------------------------------------------------------
+
+def compact(frames):
+    """
+    Relocation-based 'replacement' routine: slides all occupied frames toward
+    address 0 (preserving relative order) so every free frame becomes one
+    single contiguous block at the end of memory. This is what a real OS
+    would do (memory compaction) when a request fails purely due to
+    external fragmentation rather than a genuine lack of free memory.
+    Returns True if compaction actually changed anything.
+    """
+    occupied = [f for f in frames if f is not None]
+    new_frames = occupied + [None] * (len(frames) - len(occupied))
+    changed = new_frames != frames
+    frames[:] = new_frames
+    return changed
+
+
+def frames_str(frames):
+    out = []
+    for f in frames:
+        if f is None:
+            out.append(".")
+        else:
+            # use last token of the job key (id) truncated to fit one char if possible
+            jid = f.split("@")[0]
+            out.append(jid[-1] if len(jid) <= 2 else "#")
+    return "".join(out)
+
+
+# ---------------------------------------------------------------------------
+# SIMULATION ENGINE
+# ---------------------------------------------------------------------------
+
+def run_simulation(jobs, strategy, log_path):
+    allocate_fn = ALLOCATORS[strategy]
+    frames = [None] * NUM_FRAMES
+    waiting = []           # FIFO list of Job objects waiting for memory
+    active_departure = {}  # job_key -> departure time (for reporting)
+    stats = {
+        "compactions": 0,
+        "total_wait": 0,
+        "jobs_delayed": 0,
+        "utilization_area": 0,   # integral of used-frames * time
+        "last_time": 0,
+    }
+
+    # event heap: (time, priority, seq, kind, job)
+    # priority: 0 = departure processed before arrivals(1) at same timestamp
+    heap = []
+    seq = 0
+    for j in jobs:
+        heap.append((j.start, 1, seq, "arrive", j))
+        seq += 1
+    heapq.heapify(heap)
+
+    log_lines = []
+
+    def integrate_to(t):
+        used = sum(1 for f in frames if f is not None)
+        stats["utilization_area"] += used * max(0, t - stats["last_time"])
+        stats["last_time"] = t
+
+    def try_allocate(job, now):
+        start = allocate_fn(frames, job.size)
+        if start is None:
+            free_total = sum(1 for f in frames if f is None)
+            if free_total >= job.size:
+                # fragmented but enough total space -> invoke replacement/compaction
+                if compact(frames):
+                    stats["compactions"] += 1
+                    log_lines.append(
+                        f"t={now:>3} | COMPACT   | memory defragmented -> {frames_str(frames)}"
+                    )
+                start = allocate_fn(frames, job.size)
+        return start
+
+    def log_state(now, event_desc):
+        used = sum(1 for f in frames if f is not None)
+        log_lines.append(
+            f"t={now:>3} | {event_desc:<9} | mem[{frames_str(frames)}] "
+            f"used={used:2}/{NUM_FRAMES}KB free={NUM_FRAMES-used:2}KB "
+            f"waiting={[j.key for j in waiting]}"
+        )
+
+    while heap:
+        time, prio, _, kind, job = heapq.heappop(heap)
+        integrate_to(time)
+
+        if kind == "depart":
+            freed = deallocate(frames, job.key)
+            log_state(time, f"DEPART {job.jid}")
+            # a departure may free enough room for waiting jobs -> retry FIFO
+            still_waiting = []
+            for wj in waiting:
+                start = try_allocate(wj, time)
+                if start is not None:
+                    place(frames, start, wj.size, wj.key)
+                    delay = time - wj.start
+                    stats["total_wait"] += delay
+                    stats["jobs_delayed"] += 1
+                    departure_time = time + wj.interval
+                    heapq.heappush(heap, (departure_time, 0, seq, "depart", wj))
+                    seq += 1
+                    log_lines.append(
+                        f"t={time:>3} | ADMIT-WQ  | job {wj.jid} (waited {delay}s) "
+                        f"placed @frame{start} size={wj.size}KB -> depart t={departure_time} ({wj.end_state})"
+                    )
+                    log_state(time, f"IN-MEM {wj.jid}")
+                else:
+                    still_waiting.append(wj)
+            waiting[:] = still_waiting
+
+        else:  # arrive
+            start = try_allocate(job, time)
+            if start is not None:
+                place(frames, start, job.size, job.key)
+                departure_time = time + job.interval
+                heapq.heappush(heap, (departure_time, 0, seq, "depart", job))
+                seq += 1
+                log_lines.append(
+                    f"t={time:>3} | ARRIVE    | job {job.jid} needs {job.size}KB "
+                    f"placed @frame{start} -> depart t={departure_time} ({job.end_state})"
+                )
+                log_state(time, f"IN-MEM {job.jid}")
+            else:
+                waiting.append(job)
+                log_lines.append(
+                    f"t={time:>3} | WAIT      | job {job.jid} needs {job.size}KB "
+                    f"-> no fit, queued (free={sum(1 for f in frames if f is None)}KB)"
+                )
+                log_state(time, f"QUEUE {job.jid}")
+
+    integrate_to(stats["last_time"])
+    total_time = max((j.start + j.interval for j in jobs), default=1)
+    avg_util = stats["utilization_area"] / total_time if total_time else 0
+
+    summary = [
+        "",
+        "=" * 70,
+        f"SUMMARY  strategy={strategy}",
+        "=" * 70,
+        f"Total simulated time span      : {total_time}s",
+        f"Jobs delayed (had to wait)     : {stats['jobs_delayed']}",
+        f"Total wait time (sum of delays): {stats['total_wait']}s",
+        f"Compactions triggered          : {stats['compactions']}",
+        f"Average memory utilization     : {avg_util:.2f} KB / {NUM_FRAMES} KB "
+        f"({avg_util/NUM_FRAMES*100:.1f}%)",
+        f"Jobs left permanently waiting  : {len(waiting)}  {[j.key for j in waiting]}",
+    ]
+
+    with open(log_path, "w") as f:
+        f.write("\n".join(log_lines))
+        f.write("\n")
+        f.write("\n".join(summary))
+        f.write("\n")
+
+    return {
+        "strategy": strategy,
+        "total_time": total_time,
+        "jobs_delayed": stats["jobs_delayed"],
+        "total_wait": stats["total_wait"],
+        "compactions": stats["compactions"],
+        "avg_util_kb": avg_util,
+        "avg_util_pct": avg_util / NUM_FRAMES * 100,
+        "stuck_waiting": len(waiting),
+    }
+
+
+if __name__ == "__main__":
+    table_path = sys.argv[1]
+    strategy = sys.argv[2]
+    out_path = sys.argv[3]
+    jobs = load_jobs(table_path)
+    result = run_simulation(jobs, strategy, out_path)
+    print(result)
+
+########## table1_jobs.txt ##########
+# Job ID, Start Time, Size(KB), Interval(s), EndState
+1,1,2,7,End
+2,2,3,8,Sleep
+3,3,4,6,End
+4,4,3,6,Sleep
+5,5,2,9,Sleep
+6,6,3,6,Sleep
+7,7,2,6,Sleep
+
+########## table2_jobs.txt ##########
+# Job ID, Start Time, Size(KB), Interval(s), EndState
+8,8,3,4,Sleep
+9,9,5,5,Sleep
+10,10,2,8,Sleep
+11,11,4,6,End
+12,12,6,5,Sleep
+2,13,3,6,End
+4,13,3,4,Sleep
+13,13,5,3,End
+7,13,2,3,End
+9,17,4,4,Sleep
+10,19,2,11,End
+6,19,3,6,End
+5,20,2,10,Sleep
+4,21,3,12,Sleep
+12,22,6,13,End
+8,22,3,9,End
+9,28,5,11,End
+5,33,2,3,Sleep
+4,34,3,10,End
+5,38,2,10,End
+
+########## table3_fragmentation_demo.txt ##########
+# Job ID, Start Time, Size(KB), Interval(s), EndState
+# Purpose-built case to force external fragmentation and exercise compact()
+A,1,6,10,End
+B,1,4,5,Sleep
+C,1,6,10,End
+D,1,2,5,Sleep
+E,6,6,5,End
+
+########## table1_first-fit.log ##########
+t=  1 | ARRIVE    | job 1 needs 2KB placed @frame0 -> depart t=8 (End)
+t=  1 | IN-MEM 1  | mem[11..................] used= 2/20KB free=18KB waiting=[]
+t=  2 | ARRIVE    | job 2 needs 3KB placed @frame2 -> depart t=10 (Sleep)
+t=  2 | IN-MEM 2  | mem[11222...............] used= 5/20KB free=15KB waiting=[]
+t=  3 | ARRIVE    | job 3 needs 4KB placed @frame5 -> depart t=9 (End)
+t=  3 | IN-MEM 3  | mem[112223333...........] used= 9/20KB free=11KB waiting=[]
+t=  4 | ARRIVE    | job 4 needs 3KB placed @frame9 -> depart t=10 (Sleep)
+t=  4 | IN-MEM 4  | mem[112223333444........] used=12/20KB free= 8KB waiting=[]
+t=  5 | ARRIVE    | job 5 needs 2KB placed @frame12 -> depart t=14 (Sleep)
+t=  5 | IN-MEM 5  | mem[11222333344455......] used=14/20KB free= 6KB waiting=[]
+t=  6 | ARRIVE    | job 6 needs 3KB placed @frame14 -> depart t=12 (Sleep)
+t=  6 | IN-MEM 6  | mem[11222333344455666...] used=17/20KB free= 3KB waiting=[]
+t=  7 | ARRIVE    | job 7 needs 2KB placed @frame17 -> depart t=13 (Sleep)
+t=  7 | IN-MEM 7  | mem[1122233334445566677.] used=19/20KB free= 1KB waiting=[]
+t=  8 | DEPART 1  | mem[..22233334445566677.] used=17/20KB free= 3KB waiting=[]
+t=  9 | DEPART 3  | mem[..222....4445566677.] used=13/20KB free= 7KB waiting=[]
+t= 10 | DEPART 2  | mem[.........4445566677.] used=10/20KB free=10KB waiting=[]
+t= 10 | DEPART 4  | mem[............5566677.] used= 7/20KB free=13KB waiting=[]
+t= 12 | DEPART 6  | mem[............55...77.] used= 4/20KB free=16KB waiting=[]
+t= 13 | DEPART 7  | mem[............55......] used= 2/20KB free=18KB waiting=[]
+t= 14 | DEPART 5  | mem[....................] used= 0/20KB free=20KB waiting=[]
+
+======================================================================
+SUMMARY  strategy=first-fit
+======================================================================
+Total simulated time span      : 14s
+Jobs delayed (had to wait)     : 0
+Total wait time (sum of delays): 0s
+Compactions triggered          : 0
+Average memory utilization     : 9.14 KB / 20 KB (45.7%)
+Jobs left permanently waiting  : 0  []
+
+########## table1_best-fit.log ##########
+t=  1 | ARRIVE    | job 1 needs 2KB placed @frame0 -> depart t=8 (End)
+t=  1 | IN-MEM 1  | mem[11..................] used= 2/20KB free=18KB waiting=[]
+t=  2 | ARRIVE    | job 2 needs 3KB placed @frame2 -> depart t=10 (Sleep)
+t=  2 | IN-MEM 2  | mem[11222...............] used= 5/20KB free=15KB waiting=[]
+t=  3 | ARRIVE    | job 3 needs 4KB placed @frame5 -> depart t=9 (End)
+t=  3 | IN-MEM 3  | mem[112223333...........] used= 9/20KB free=11KB waiting=[]
+t=  4 | ARRIVE    | job 4 needs 3KB placed @frame9 -> depart t=10 (Sleep)
+t=  4 | IN-MEM 4  | mem[112223333444........] used=12/20KB free= 8KB waiting=[]
+t=  5 | ARRIVE    | job 5 needs 2KB placed @frame12 -> depart t=14 (Sleep)
+t=  5 | IN-MEM 5  | mem[11222333344455......] used=14/20KB free= 6KB waiting=[]
+t=  6 | ARRIVE    | job 6 needs 3KB placed @frame14 -> depart t=12 (Sleep)
+t=  6 | IN-MEM 6  | mem[11222333344455666...] used=17/20KB free= 3KB waiting=[]
+t=  7 | ARRIVE    | job 7 needs 2KB placed @frame17 -> depart t=13 (Sleep)
+t=  7 | IN-MEM 7  | mem[1122233334445566677.] used=19/20KB free= 1KB waiting=[]
+t=  8 | DEPART 1  | mem[..22233334445566677.] used=17/20KB free= 3KB waiting=[]
+t=  9 | DEPART 3  | mem[..222....4445566677.] used=13/20KB free= 7KB waiting=[]
+t= 10 | DEPART 2  | mem[.........4445566677.] used=10/20KB free=10KB waiting=[]
+t= 10 | DEPART 4  | mem[............5566677.] used= 7/20KB free=13KB waiting=[]
+t= 12 | DEPART 6  | mem[............55...77.] used= 4/20KB free=16KB waiting=[]
+t= 13 | DEPART 7  | mem[............55......] used= 2/20KB free=18KB waiting=[]
+t= 14 | DEPART 5  | mem[....................] used= 0/20KB free=20KB waiting=[]
+
+======================================================================
+SUMMARY  strategy=best-fit
+======================================================================
+Total simulated time span      : 14s
+Jobs delayed (had to wait)     : 0
+Total wait time (sum of delays): 0s
+Compactions triggered          : 0
+Average memory utilization     : 9.14 KB / 20 KB (45.7%)
+Jobs left permanently waiting  : 0  []
+
+########## table1_worst-fit.log ##########
+t=  1 | ARRIVE    | job 1 needs 2KB placed @frame0 -> depart t=8 (End)
+t=  1 | IN-MEM 1  | mem[11..................] used= 2/20KB free=18KB waiting=[]
+t=  2 | ARRIVE    | job 2 needs 3KB placed @frame2 -> depart t=10 (Sleep)
+t=  2 | IN-MEM 2  | mem[11222...............] used= 5/20KB free=15KB waiting=[]
+t=  3 | ARRIVE    | job 3 needs 4KB placed @frame5 -> depart t=9 (End)
+t=  3 | IN-MEM 3  | mem[112223333...........] used= 9/20KB free=11KB waiting=[]
+t=  4 | ARRIVE    | job 4 needs 3KB placed @frame9 -> depart t=10 (Sleep)
+t=  4 | IN-MEM 4  | mem[112223333444........] used=12/20KB free= 8KB waiting=[]
+t=  5 | ARRIVE    | job 5 needs 2KB placed @frame12 -> depart t=14 (Sleep)
+t=  5 | IN-MEM 5  | mem[11222333344455......] used=14/20KB free= 6KB waiting=[]
+t=  6 | ARRIVE    | job 6 needs 3KB placed @frame14 -> depart t=12 (Sleep)
+t=  6 | IN-MEM 6  | mem[11222333344455666...] used=17/20KB free= 3KB waiting=[]
+t=  7 | ARRIVE    | job 7 needs 2KB placed @frame17 -> depart t=13 (Sleep)
+t=  7 | IN-MEM 7  | mem[1122233334445566677.] used=19/20KB free= 1KB waiting=[]
+t=  8 | DEPART 1  | mem[..22233334445566677.] used=17/20KB free= 3KB waiting=[]
+t=  9 | DEPART 3  | mem[..222....4445566677.] used=13/20KB free= 7KB waiting=[]
+t= 10 | DEPART 2  | mem[.........4445566677.] used=10/20KB free=10KB waiting=[]
+t= 10 | DEPART 4  | mem[............5566677.] used= 7/20KB free=13KB waiting=[]
+t= 12 | DEPART 6  | mem[............55...77.] used= 4/20KB free=16KB waiting=[]
+t= 13 | DEPART 7  | mem[............55......] used= 2/20KB free=18KB waiting=[]
+t= 14 | DEPART 5  | mem[....................] used= 0/20KB free=20KB waiting=[]
+
+======================================================================
+SUMMARY  strategy=worst-fit
+======================================================================
+Total simulated time span      : 14s
+Jobs delayed (had to wait)     : 0
+Total wait time (sum of delays): 0s
+Compactions triggered          : 0
+Average memory utilization     : 9.14 KB / 20 KB (45.7%)
+Jobs left permanently waiting  : 0  []
+
+########## table2_first-fit.log ##########
+t=  8 | ARRIVE    | job 8 needs 3KB placed @frame0 -> depart t=12 (Sleep)
+t=  8 | IN-MEM 8  | mem[888.................] used= 3/20KB free=17KB waiting=[]
+t=  9 | ARRIVE    | job 9 needs 5KB placed @frame3 -> depart t=14 (Sleep)
+t=  9 | IN-MEM 9  | mem[88899999............] used= 8/20KB free=12KB waiting=[]
+t= 10 | ARRIVE    | job 10 needs 2KB placed @frame8 -> depart t=18 (Sleep)
+t= 10 | IN-MEM 10 | mem[8889999900..........] used=10/20KB free=10KB waiting=[]
+t= 11 | ARRIVE    | job 11 needs 4KB placed @frame10 -> depart t=17 (End)
+t= 11 | IN-MEM 11 | mem[88899999001111......] used=14/20KB free= 6KB waiting=[]
+t= 12 | DEPART 8  | mem[...99999001111......] used=11/20KB free= 9KB waiting=[]
+t= 12 | ARRIVE    | job 12 needs 6KB placed @frame14 -> depart t=17 (Sleep)
+t= 12 | IN-MEM 12 | mem[...99999001111222222] used=17/20KB free= 3KB waiting=[]
+t= 13 | ARRIVE    | job 2 needs 3KB placed @frame0 -> depart t=19 (End)
+t= 13 | IN-MEM 2  | mem[22299999001111222222] used=20/20KB free= 0KB waiting=[]
+t= 13 | WAIT      | job 4 needs 3KB -> no fit, queued (free=0KB)
+t= 13 | QUEUE 4   | mem[22299999001111222222] used=20/20KB free= 0KB waiting=['4@13']
+t= 13 | WAIT      | job 13 needs 5KB -> no fit, queued (free=0KB)
+t= 13 | QUEUE 13  | mem[22299999001111222222] used=20/20KB free= 0KB waiting=['4@13', '13@13']
+t= 13 | WAIT      | job 7 needs 2KB -> no fit, queued (free=0KB)
+t= 13 | QUEUE 7   | mem[22299999001111222222] used=20/20KB free= 0KB waiting=['4@13', '13@13', '7@13']
+t= 14 | DEPART 9  | mem[222.....001111222222] used=15/20KB free= 5KB waiting=['4@13', '13@13', '7@13']
+t= 14 | ADMIT-WQ  | job 4 (waited 1s) placed @frame3 size=3KB -> depart t=18 (Sleep)
+t= 14 | IN-MEM 4  | mem[222444..001111222222] used=18/20KB free= 2KB waiting=['4@13', '13@13', '7@13']
+t= 14 | ADMIT-WQ  | job 7 (waited 1s) placed @frame6 size=2KB -> depart t=17 (End)
+t= 14 | IN-MEM 7  | mem[22244477001111222222] used=20/20KB free= 0KB waiting=['4@13', '13@13', '7@13']
+t= 17 | DEPART 11 | mem[2224447700....222222] used=16/20KB free= 4KB waiting=['13@13']
+t= 17 | DEPART 12 | mem[2224447700..........] used=10/20KB free=10KB waiting=['13@13']
+t= 17 | ADMIT-WQ  | job 13 (waited 4s) placed @frame10 size=5KB -> depart t=20 (End)
+t= 17 | IN-MEM 13 | mem[222444770033333.....] used=15/20KB free= 5KB waiting=['13@13']
+t= 17 | DEPART 7  | mem[222444..0033333.....] used=13/20KB free= 7KB waiting=[]
+t= 17 | ARRIVE    | job 9 needs 4KB placed @frame15 -> depart t=21 (Sleep)
+t= 17 | IN-MEM 9  | mem[222444..00333339999.] used=17/20KB free= 3KB waiting=[]
+t= 18 | DEPART 10 | mem[222444....333339999.] used=15/20KB free= 5KB waiting=[]
+t= 18 | DEPART 4  | mem[222.......333339999.] used=12/20KB free= 8KB waiting=[]
+t= 19 | DEPART 2  | mem[..........333339999.] used= 9/20KB free=11KB waiting=[]
+t= 19 | ARRIVE    | job 10 needs 2KB placed @frame0 -> depart t=30 (End)
+t= 19 | IN-MEM 10 | mem[00........333339999.] used=11/20KB free= 9KB waiting=[]
+t= 19 | ARRIVE    | job 6 needs 3KB placed @frame2 -> depart t=25 (End)
+t= 19 | IN-MEM 6  | mem[00666.....333339999.] used=14/20KB free= 6KB waiting=[]
+t= 20 | DEPART 13 | mem[00666..........9999.] used= 9/20KB free=11KB waiting=[]
+t= 20 | ARRIVE    | job 5 needs 2KB placed @frame5 -> depart t=30 (Sleep)
+t= 20 | IN-MEM 5  | mem[0066655........9999.] used=11/20KB free= 9KB waiting=[]
+t= 21 | DEPART 9  | mem[0066655.............] used= 7/20KB free=13KB waiting=[]
+t= 21 | ARRIVE    | job 4 needs 3KB placed @frame7 -> depart t=33 (Sleep)
+t= 21 | IN-MEM 4  | mem[0066655444..........] used=10/20KB free=10KB waiting=[]
+t= 22 | ARRIVE    | job 12 needs 6KB placed @frame10 -> depart t=35 (End)
+t= 22 | IN-MEM 12 | mem[0066655444222222....] used=16/20KB free= 4KB waiting=[]
+t= 22 | ARRIVE    | job 8 needs 3KB placed @frame16 -> depart t=31 (End)
+t= 22 | IN-MEM 8  | mem[0066655444222222888.] used=19/20KB free= 1KB waiting=[]
+t= 25 | DEPART 6  | mem[00...55444222222888.] used=16/20KB free= 4KB waiting=[]
+t= 28 | WAIT      | job 9 needs 5KB -> no fit, queued (free=4KB)
+t= 28 | QUEUE 9   | mem[00...55444222222888.] used=16/20KB free= 4KB waiting=['9@28']
+t= 30 | DEPART 10 | mem[.....55444222222888.] used=14/20KB free= 6KB waiting=['9@28']
+t= 30 | ADMIT-WQ  | job 9 (waited 2s) placed @frame0 size=5KB -> depart t=41 (End)
+t= 30 | IN-MEM 9  | mem[9999955444222222888.] used=19/20KB free= 1KB waiting=['9@28']
+t= 30 | DEPART 5  | mem[99999..444222222888.] used=17/20KB free= 3KB waiting=[]
+t= 31 | DEPART 8  | mem[99999..444222222....] used=14/20KB free= 6KB waiting=[]
+t= 33 | DEPART 4  | mem[99999.....222222....] used=11/20KB free= 9KB waiting=[]
+t= 33 | ARRIVE    | job 5 needs 2KB placed @frame5 -> depart t=36 (Sleep)
+t= 33 | IN-MEM 5  | mem[9999955...222222....] used=13/20KB free= 7KB waiting=[]
+t= 34 | ARRIVE    | job 4 needs 3KB placed @frame7 -> depart t=44 (End)
+t= 34 | IN-MEM 4  | mem[9999955444222222....] used=16/20KB free= 4KB waiting=[]
+t= 35 | DEPART 12 | mem[9999955444..........] used=10/20KB free=10KB waiting=[]
+t= 36 | DEPART 5  | mem[99999..444..........] used= 8/20KB free=12KB waiting=[]
+t= 38 | ARRIVE    | job 5 needs 2KB placed @frame5 -> depart t=48 (End)
+t= 38 | IN-MEM 5  | mem[9999955444..........] used=10/20KB free=10KB waiting=[]
+t= 41 | DEPART 9  | mem[.....55444..........] used= 5/20KB free=15KB waiting=[]
+t= 44 | DEPART 4  | mem[.....55.............] used= 2/20KB free=18KB waiting=[]
+t= 48 | DEPART 5  | mem[....................] used= 0/20KB free=20KB waiting=[]
+
+======================================================================
+SUMMARY  strategy=first-fit
+======================================================================
+Total simulated time span      : 48s
+Jobs delayed (had to wait)     : 4
+Total wait time (sum of delays): 8s
+Compactions triggered          : 0
+Average memory utilization     : 10.12 KB / 20 KB (50.6%)
+Jobs left permanently waiting  : 0  []
+
+########## table2_best-fit.log ##########
+t=  8 | ARRIVE    | job 8 needs 3KB placed @frame0 -> depart t=12 (Sleep)
+t=  8 | IN-MEM 8  | mem[888.................] used= 3/20KB free=17KB waiting=[]
+t=  9 | ARRIVE    | job 9 needs 5KB placed @frame3 -> depart t=14 (Sleep)
+t=  9 | IN-MEM 9  | mem[88899999............] used= 8/20KB free=12KB waiting=[]
+t= 10 | ARRIVE    | job 10 needs 2KB placed @frame8 -> depart t=18 (Sleep)
+t= 10 | IN-MEM 10 | mem[8889999900..........] used=10/20KB free=10KB waiting=[]
+t= 11 | ARRIVE    | job 11 needs 4KB placed @frame10 -> depart t=17 (End)
+t= 11 | IN-MEM 11 | mem[88899999001111......] used=14/20KB free= 6KB waiting=[]
+t= 12 | DEPART 8  | mem[...99999001111......] used=11/20KB free= 9KB waiting=[]
+t= 12 | ARRIVE    | job 12 needs 6KB placed @frame14 -> depart t=17 (Sleep)
+t= 12 | IN-MEM 12 | mem[...99999001111222222] used=17/20KB free= 3KB waiting=[]
+t= 13 | ARRIVE    | job 2 needs 3KB placed @frame0 -> depart t=19 (End)
+t= 13 | IN-MEM 2  | mem[22299999001111222222] used=20/20KB free= 0KB waiting=[]
+t= 13 | WAIT      | job 4 needs 3KB -> no fit, queued (free=0KB)
+t= 13 | QUEUE 4   | mem[22299999001111222222] used=20/20KB free= 0KB waiting=['4@13']
+t= 13 | WAIT      | job 13 needs 5KB -> no fit, queued (free=0KB)
+t= 13 | QUEUE 13  | mem[22299999001111222222] used=20/20KB free= 0KB waiting=['4@13', '13@13']
+t= 13 | WAIT      | job 7 needs 2KB -> no fit, queued (free=0KB)
+t= 13 | QUEUE 7   | mem[22299999001111222222] used=20/20KB free= 0KB waiting=['4@13', '13@13', '7@13']
+t= 14 | DEPART 9  | mem[222.....001111222222] used=15/20KB free= 5KB waiting=['4@13', '13@13', '7@13']
+t= 14 | ADMIT-WQ  | job 4 (waited 1s) placed @frame3 size=3KB -> depart t=18 (Sleep)
+t= 14 | IN-MEM 4  | mem[222444..001111222222] used=18/20KB free= 2KB waiting=['4@13', '13@13', '7@13']
+t= 14 | ADMIT-WQ  | job 7 (waited 1s) placed @frame6 size=2KB -> depart t=17 (End)
+t= 14 | IN-MEM 7  | mem[22244477001111222222] used=20/20KB free= 0KB waiting=['4@13', '13@13', '7@13']
+t= 17 | DEPART 11 | mem[2224447700....222222] used=16/20KB free= 4KB waiting=['13@13']
+t= 17 | DEPART 12 | mem[2224447700..........] used=10/20KB free=10KB waiting=['13@13']
+t= 17 | ADMIT-WQ  | job 13 (waited 4s) placed @frame10 size=5KB -> depart t=20 (End)
+t= 17 | IN-MEM 13 | mem[222444770033333.....] used=15/20KB free= 5KB waiting=['13@13']
+t= 17 | DEPART 7  | mem[222444..0033333.....] used=13/20KB free= 7KB waiting=[]
+t= 17 | ARRIVE    | job 9 needs 4KB placed @frame15 -> depart t=21 (Sleep)
+t= 17 | IN-MEM 9  | mem[222444..00333339999.] used=17/20KB free= 3KB waiting=[]
+t= 18 | DEPART 10 | mem[222444....333339999.] used=15/20KB free= 5KB waiting=[]
+t= 18 | DEPART 4  | mem[222.......333339999.] used=12/20KB free= 8KB waiting=[]
+t= 19 | DEPART 2  | mem[..........333339999.] used= 9/20KB free=11KB waiting=[]
+t= 19 | ARRIVE    | job 10 needs 2KB placed @frame0 -> depart t=30 (End)
+t= 19 | IN-MEM 10 | mem[00........333339999.] used=11/20KB free= 9KB waiting=[]
+t= 19 | ARRIVE    | job 6 needs 3KB placed @frame2 -> depart t=25 (End)
+t= 19 | IN-MEM 6  | mem[00666.....333339999.] used=14/20KB free= 6KB waiting=[]
+t= 20 | DEPART 13 | mem[00666..........9999.] used= 9/20KB free=11KB waiting=[]
+t= 20 | ARRIVE    | job 5 needs 2KB placed @frame5 -> depart t=30 (Sleep)
+t= 20 | IN-MEM 5  | mem[0066655........9999.] used=11/20KB free= 9KB waiting=[]
+t= 21 | DEPART 9  | mem[0066655.............] used= 7/20KB free=13KB waiting=[]
+t= 21 | ARRIVE    | job 4 needs 3KB placed @frame7 -> depart t=33 (Sleep)
+t= 21 | IN-MEM 4  | mem[0066655444..........] used=10/20KB free=10KB waiting=[]
+t= 22 | ARRIVE    | job 12 needs 6KB placed @frame10 -> depart t=35 (End)
+t= 22 | IN-MEM 12 | mem[0066655444222222....] used=16/20KB free= 4KB waiting=[]
+t= 22 | ARRIVE    | job 8 needs 3KB placed @frame16 -> depart t=31 (End)
+t= 22 | IN-MEM 8  | mem[0066655444222222888.] used=19/20KB free= 1KB waiting=[]
+t= 25 | DEPART 6  | mem[00...55444222222888.] used=16/20KB free= 4KB waiting=[]
+t= 28 | WAIT      | job 9 needs 5KB -> no fit, queued (free=4KB)
+t= 28 | QUEUE 9   | mem[00...55444222222888.] used=16/20KB free= 4KB waiting=['9@28']
+t= 30 | DEPART 10 | mem[.....55444222222888.] used=14/20KB free= 6KB waiting=['9@28']
+t= 30 | ADMIT-WQ  | job 9 (waited 2s) placed @frame0 size=5KB -> depart t=41 (End)
+t= 30 | IN-MEM 9  | mem[9999955444222222888.] used=19/20KB free= 1KB waiting=['9@28']
+t= 30 | DEPART 5  | mem[99999..444222222888.] used=17/20KB free= 3KB waiting=[]
+t= 31 | DEPART 8  | mem[99999..444222222....] used=14/20KB free= 6KB waiting=[]
+t= 33 | DEPART 4  | mem[99999.....222222....] used=11/20KB free= 9KB waiting=[]
+t= 33 | ARRIVE    | job 5 needs 2KB placed @frame16 -> depart t=36 (Sleep)
+t= 33 | IN-MEM 5  | mem[99999.....22222255..] used=13/20KB free= 7KB waiting=[]
+t= 34 | ARRIVE    | job 4 needs 3KB placed @frame5 -> depart t=44 (End)
+t= 34 | IN-MEM 4  | mem[99999444..22222255..] used=16/20KB free= 4KB waiting=[]
+t= 35 | DEPART 12 | mem[99999444........55..] used=10/20KB free=10KB waiting=[]
+t= 36 | DEPART 5  | mem[99999444............] used= 8/20KB free=12KB waiting=[]
+t= 38 | ARRIVE    | job 5 needs 2KB placed @frame8 -> depart t=48 (End)
+t= 38 | IN-MEM 5  | mem[9999944455..........] used=10/20KB free=10KB waiting=[]
+t= 41 | DEPART 9  | mem[.....44455..........] used= 5/20KB free=15KB waiting=[]
+t= 44 | DEPART 4  | mem[........55..........] used= 2/20KB free=18KB waiting=[]
+t= 48 | DEPART 5  | mem[....................] used= 0/20KB free=20KB waiting=[]
+
+======================================================================
+SUMMARY  strategy=best-fit
+======================================================================
+Total simulated time span      : 48s
+Jobs delayed (had to wait)     : 4
+Total wait time (sum of delays): 8s
+Compactions triggered          : 0
+Average memory utilization     : 10.12 KB / 20 KB (50.6%)
+Jobs left permanently waiting  : 0  []
+
+########## table2_worst-fit.log ##########
+t=  8 | ARRIVE    | job 8 needs 3KB placed @frame0 -> depart t=12 (Sleep)
+t=  8 | IN-MEM 8  | mem[888.................] used= 3/20KB free=17KB waiting=[]
+t=  9 | ARRIVE    | job 9 needs 5KB placed @frame3 -> depart t=14 (Sleep)
+t=  9 | IN-MEM 9  | mem[88899999............] used= 8/20KB free=12KB waiting=[]
+t= 10 | ARRIVE    | job 10 needs 2KB placed @frame8 -> depart t=18 (Sleep)
+t= 10 | IN-MEM 10 | mem[8889999900..........] used=10/20KB free=10KB waiting=[]
+t= 11 | ARRIVE    | job 11 needs 4KB placed @frame10 -> depart t=17 (End)
+t= 11 | IN-MEM 11 | mem[88899999001111......] used=14/20KB free= 6KB waiting=[]
+t= 12 | DEPART 8  | mem[...99999001111......] used=11/20KB free= 9KB waiting=[]
+t= 12 | ARRIVE    | job 12 needs 6KB placed @frame14 -> depart t=17 (Sleep)
+t= 12 | IN-MEM 12 | mem[...99999001111222222] used=17/20KB free= 3KB waiting=[]
+t= 13 | ARRIVE    | job 2 needs 3KB placed @frame0 -> depart t=19 (End)
+t= 13 | IN-MEM 2  | mem[22299999001111222222] used=20/20KB free= 0KB waiting=[]
+t= 13 | WAIT      | job 4 needs 3KB -> no fit, queued (free=0KB)
+t= 13 | QUEUE 4   | mem[22299999001111222222] used=20/20KB free= 0KB waiting=['4@13']
+t= 13 | WAIT      | job 13 needs 5KB -> no fit, queued (free=0KB)
+t= 13 | QUEUE 13  | mem[22299999001111222222] used=20/20KB free= 0KB waiting=['4@13', '13@13']
+t= 13 | WAIT      | job 7 needs 2KB -> no fit, queued (free=0KB)
+t= 13 | QUEUE 7   | mem[22299999001111222222] used=20/20KB free= 0KB waiting=['4@13', '13@13', '7@13']
+t= 14 | DEPART 9  | mem[222.....001111222222] used=15/20KB free= 5KB waiting=['4@13', '13@13', '7@13']
+t= 14 | ADMIT-WQ  | job 4 (waited 1s) placed @frame3 size=3KB -> depart t=18 (Sleep)
+t= 14 | IN-MEM 4  | mem[222444..001111222222] used=18/20KB free= 2KB waiting=['4@13', '13@13', '7@13']
+t= 14 | ADMIT-WQ  | job 7 (waited 1s) placed @frame6 size=2KB -> depart t=17 (End)
+t= 14 | IN-MEM 7  | mem[22244477001111222222] used=20/20KB free= 0KB waiting=['4@13', '13@13', '7@13']
+t= 17 | DEPART 11 | mem[2224447700....222222] used=16/20KB free= 4KB waiting=['13@13']
+t= 17 | DEPART 12 | mem[2224447700..........] used=10/20KB free=10KB waiting=['13@13']
+t= 17 | ADMIT-WQ  | job 13 (waited 4s) placed @frame10 size=5KB -> depart t=20 (End)
+t= 17 | IN-MEM 13 | mem[222444770033333.....] used=15/20KB free= 5KB waiting=['13@13']
+t= 17 | DEPART 7  | mem[222444..0033333.....] used=13/20KB free= 7KB waiting=[]
+t= 17 | ARRIVE    | job 9 needs 4KB placed @frame15 -> depart t=21 (Sleep)
+t= 17 | IN-MEM 9  | mem[222444..00333339999.] used=17/20KB free= 3KB waiting=[]
+t= 18 | DEPART 10 | mem[222444....333339999.] used=15/20KB free= 5KB waiting=[]
+t= 18 | DEPART 4  | mem[222.......333339999.] used=12/20KB free= 8KB waiting=[]
+t= 19 | DEPART 2  | mem[..........333339999.] used= 9/20KB free=11KB waiting=[]
+t= 19 | ARRIVE    | job 10 needs 2KB placed @frame0 -> depart t=30 (End)
+t= 19 | IN-MEM 10 | mem[00........333339999.] used=11/20KB free= 9KB waiting=[]
+t= 19 | ARRIVE    | job 6 needs 3KB placed @frame2 -> depart t=25 (End)
+t= 19 | IN-MEM 6  | mem[00666.....333339999.] used=14/20KB free= 6KB waiting=[]
+t= 20 | DEPART 13 | mem[00666..........9999.] used= 9/20KB free=11KB waiting=[]
+t= 20 | ARRIVE    | job 5 needs 2KB placed @frame5 -> depart t=30 (Sleep)
+t= 20 | IN-MEM 5  | mem[0066655........9999.] used=11/20KB free= 9KB waiting=[]
+t= 21 | DEPART 9  | mem[0066655.............] used= 7/20KB free=13KB waiting=[]
+t= 21 | ARRIVE    | job 4 needs 3KB placed @frame7 -> depart t=33 (Sleep)
+t= 21 | IN-MEM 4  | mem[0066655444..........] used=10/20KB free=10KB waiting=[]
+t= 22 | ARRIVE    | job 12 needs 6KB placed @frame10 -> depart t=35 (End)
+t= 22 | IN-MEM 12 | mem[0066655444222222....] used=16/20KB free= 4KB waiting=[]
+t= 22 | ARRIVE    | job 8 needs 3KB placed @frame16 -> depart t=31 (End)
+t= 22 | IN-MEM 8  | mem[0066655444222222888.] used=19/20KB free= 1KB waiting=[]
+t= 25 | DEPART 6  | mem[00...55444222222888.] used=16/20KB free= 4KB waiting=[]
+t= 28 | WAIT      | job 9 needs 5KB -> no fit, queued (free=4KB)
+t= 28 | QUEUE 9   | mem[00...55444222222888.] used=16/20KB free= 4KB waiting=['9@28']
+t= 30 | DEPART 10 | mem[.....55444222222888.] used=14/20KB free= 6KB waiting=['9@28']
+t= 30 | ADMIT-WQ  | job 9 (waited 2s) placed @frame0 size=5KB -> depart t=41 (End)
+t= 30 | IN-MEM 9  | mem[9999955444222222888.] used=19/20KB free= 1KB waiting=['9@28']
+t= 30 | DEPART 5  | mem[99999..444222222888.] used=17/20KB free= 3KB waiting=[]
+t= 31 | DEPART 8  | mem[99999..444222222....] used=14/20KB free= 6KB waiting=[]
+t= 33 | DEPART 4  | mem[99999.....222222....] used=11/20KB free= 9KB waiting=[]
+t= 33 | ARRIVE    | job 5 needs 2KB placed @frame5 -> depart t=36 (Sleep)
+t= 33 | IN-MEM 5  | mem[9999955...222222....] used=13/20KB free= 7KB waiting=[]
+t= 34 | ARRIVE    | job 4 needs 3KB placed @frame16 -> depart t=44 (End)
+t= 34 | IN-MEM 4  | mem[9999955...222222444.] used=16/20KB free= 4KB waiting=[]
+t= 35 | DEPART 12 | mem[9999955.........444.] used=10/20KB free=10KB waiting=[]
+t= 36 | DEPART 5  | mem[99999...........444.] used= 8/20KB free=12KB waiting=[]
+t= 38 | ARRIVE    | job 5 needs 2KB placed @frame5 -> depart t=48 (End)
+t= 38 | IN-MEM 5  | mem[9999955.........444.] used=10/20KB free=10KB waiting=[]
+t= 41 | DEPART 9  | mem[.....55.........444.] used= 5/20KB free=15KB waiting=[]
+t= 44 | DEPART 4  | mem[.....55.............] used= 2/20KB free=18KB waiting=[]
+t= 48 | DEPART 5  | mem[....................] used= 0/20KB free=20KB waiting=[]
+
+======================================================================
+SUMMARY  strategy=worst-fit
+======================================================================
+Total simulated time span      : 48s
+Jobs delayed (had to wait)     : 4
+Total wait time (sum of delays): 8s
+Compactions triggered          : 0
+Average memory utilization     : 10.12 KB / 20 KB (50.6%)
+Jobs left permanently waiting  : 0  []
+
+########## table3_first-fit.log (compaction demo) ##########
+t=  1 | ARRIVE    | job A needs 6KB placed @frame0 -> depart t=11 (End)
+t=  1 | IN-MEM A  | mem[AAAAAA..............] used= 6/20KB free=14KB waiting=[]
+t=  1 | ARRIVE    | job B needs 4KB placed @frame6 -> depart t=6 (Sleep)
+t=  1 | IN-MEM B  | mem[AAAAAABBBB..........] used=10/20KB free=10KB waiting=[]
+t=  1 | ARRIVE    | job C needs 6KB placed @frame10 -> depart t=11 (End)
+t=  1 | IN-MEM C  | mem[AAAAAABBBBCCCCCC....] used=16/20KB free= 4KB waiting=[]
+t=  1 | ARRIVE    | job D needs 2KB placed @frame16 -> depart t=6 (Sleep)
+t=  1 | IN-MEM D  | mem[AAAAAABBBBCCCCCCDD..] used=18/20KB free= 2KB waiting=[]
+t=  6 | DEPART B  | mem[AAAAAA....CCCCCCDD..] used=14/20KB free= 6KB waiting=[]
+t=  6 | DEPART D  | mem[AAAAAA....CCCCCC....] used=12/20KB free= 8KB waiting=[]
+t=  6 | COMPACT   | memory defragmented -> AAAAAACCCCCC........
+t=  6 | ARRIVE    | job E needs 6KB placed @frame12 -> depart t=11 (End)
+t=  6 | IN-MEM E  | mem[AAAAAACCCCCCEEEEEE..] used=18/20KB free= 2KB waiting=[]
+t= 11 | DEPART A  | mem[......CCCCCCEEEEEE..] used=12/20KB free= 8KB waiting=[]
+t= 11 | DEPART C  | mem[............EEEEEE..] used= 6/20KB free=14KB waiting=[]
+t= 11 | DEPART E  | mem[....................] used= 0/20KB free=20KB waiting=[]
+
+======================================================================
+SUMMARY  strategy=first-fit
+======================================================================
+Total simulated time span      : 11s
+Jobs delayed (had to wait)     : 0
+Total wait time (sum of delays): 0s
+Compactions triggered          : 1
+Average memory utilization     : 16.36 KB / 20 KB (81.8%)
+Jobs left permanently waiting  : 0  []

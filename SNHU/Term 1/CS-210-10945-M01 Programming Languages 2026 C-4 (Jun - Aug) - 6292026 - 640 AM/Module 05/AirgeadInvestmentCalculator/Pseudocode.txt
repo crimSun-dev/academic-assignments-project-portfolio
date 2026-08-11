@@ -1,0 +1,135 @@
+====================================================================
+AIRGEAD BANKING - INVESTMENT GROWTH CALCULATOR
+PSEUDOCODE
+====================================================================
+
+START Program
+
+// ----------------------------------------------------------------
+// STEP 1: Declare the Investment class
+// ----------------------------------------------------------------
+DEFINE class Investment
+    DECLARE private member initialInvestment as Double
+    DECLARE private member monthlyDeposit as Double
+    DECLARE private member annualInterestRate as Double
+    DECLARE private member numberOfYears as Integer
+
+    DEFINE constructor Investment(initialInvestment, monthlyDeposit, annualInterestRate, numberOfYears)
+        VALIDATE initialInvestment is greater than zero
+        VALIDATE monthlyDeposit is greater than or equal to zero
+        VALIDATE annualInterestRate is greater than zero
+        VALIDATE numberOfYears is greater than zero
+        IF any validation fails THEN
+            THROW an invalidArgument exception with a descriptive message
+        END IF
+        STORE the validated values in the member variables
+    END constructor
+
+    DEFINE method getInitialInvestment RETURNS Double
+        RETURN initialInvestment
+    END method
+
+    DEFINE method getMonthlyDeposit RETURNS Double
+        RETURN monthlyDeposit
+    END method
+
+    DEFINE method getAnnualInterestRate RETURNS Double
+        RETURN annualInterestRate
+    END method
+
+    DEFINE method getNumberOfYears RETURNS Integer
+        RETURN numberOfYears
+    END method
+
+    DEFINE method displayYearlyReport(includeMonthlyDeposit as Boolean)
+        SET openingAmount to initialInvestment
+        SET depositAmount to monthlyDeposit if includeMonthlyDeposit is true, otherwise zero
+        SET yearlyInterestTotal to zero
+        SET totalMonths to numberOfYears multiplied by twelve
+
+        PRINT report header (Year, Year End Balance, Year End Earned Interest)
+
+        FOR each month from one to totalMonths
+            SET total to openingAmount plus depositAmount
+            SET monthlyInterest to total multiplied by ((annualInterestRate divided by one hundred) divided by twelve)
+            SET closingBalance to total plus monthlyInterest
+            ADD monthlyInterest to yearlyInterestTotal
+            SET openingAmount to closingBalance
+
+            IF month is evenly divisible by twelve THEN
+                CALCULATE currentYear as month divided by twelve
+                PRINT currentYear, closingBalance (formatted as currency), yearlyInterestTotal (formatted as currency)
+                RESET yearlyInterestTotal to zero
+            END IF
+        END FOR
+    END method
+END class
+
+
+// ----------------------------------------------------------------
+// STEP 2: Main program driver logic
+// ----------------------------------------------------------------
+DEFINE function getPositiveDoubleInput(prompt as String) RETURNS Double
+    REPEAT
+        DISPLAY prompt
+        READ userValue
+        IF userValue is not a valid number OR userValue is less than or equal to zero THEN
+            DISPLAY "Please enter a positive number."
+        END IF
+    UNTIL userValue is a valid number AND userValue is greater than zero
+    RETURN userValue
+END function
+
+DEFINE function getNonNegativeDoubleInput(prompt as String) RETURNS Double
+    REPEAT
+        DISPLAY prompt
+        READ userValue
+        IF userValue is not a valid number OR userValue is less than zero THEN
+            DISPLAY "Please enter a number that is zero or greater."
+        END IF
+    UNTIL userValue is a valid number AND userValue is greater than or equal to zero
+    RETURN userValue
+END function
+
+DEFINE function getPositiveIntegerInput(prompt as String) RETURNS Integer
+    REPEAT
+        DISPLAY prompt
+        READ userValue
+        IF userValue is not a valid whole number OR userValue is less than or equal to zero THEN
+            DISPLAY "Please enter a positive whole number."
+        END IF
+    UNTIL userValue is a valid whole number AND userValue is greater than zero
+    RETURN userValue
+END function
+
+DEFINE function main
+    DISPLAY "***** Data Input *****"
+
+    SET initialInvestmentAmount to result of getPositiveDoubleInput("Initial Investment Amount: ")
+    SET monthlyDepositAmount to result of getNonNegativeDoubleInput("Monthly Deposit: ")
+    SET annualInterestRate to result of getPositiveDoubleInput("Annual Interest: ")
+    SET numberOfYears to result of getPositiveIntegerInput("Number of Years: ")
+
+    DISPLAY "Press any key to continue . . ."
+    WAIT for key press
+
+    TRY
+        CREATE investmentAccount as new Investment using initialInvestmentAmount, monthlyDepositAmount, annualInterestRate, numberOfYears
+
+        DISPLAY "Balance and Interest Without Additional Monthly Deposits"
+        CALL investmentAccount.displayYearlyReport(false)
+
+        DISPLAY blank line
+
+        DISPLAY "Balance and Interest With Additional Monthly Deposits"
+        CALL investmentAccount.displayYearlyReport(true)
+
+    CATCH exception as caughtError
+        DISPLAY "An error occurred: " plus caughtError message
+    END TRY
+
+    DISPLAY "Press any key to exit . . ."
+    WAIT for key press
+END function
+
+END Program

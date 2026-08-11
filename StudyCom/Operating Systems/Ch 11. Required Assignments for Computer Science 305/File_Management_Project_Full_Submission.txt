@@ -1,0 +1,714 @@
+OS FILE MANAGEMENT PROJECT (LINKED DISK ALLOCATION) - COMBINED SUBMISSION
+===========================================================================
+
+########## REPORT2.md ##########
+# OS File Management Project — Linked Disk Allocation (Assignment 2)
+
+**Total memory:** 20 KB &nbsp;|&nbsp; **Page size:** 1 KB &nbsp;|&nbsp; **Disk block size:** 1 KB
+
+## Design overview
+
+The program is split into two halves, matching the two things a real OS has
+to do before it can use a file: find out where it lives, then find room for
+it in RAM.
+
+### 1. Disk model & fragment collection (`filesim2.py`, Section B)
+
+The disk is modeled as **linked allocation**: instead of a file occupying
+contiguous blocks, each block stores only a pointer to the *next* block
+belonging to the file (`disk_image2.txt`: `block:next`, `-1` = end of chain).
+The file's directory entry only records the **first** block — exactly like a
+real FCB. `collect_fragments()` starts there and walks the chain, recording
+every block it visits, until it hits the end marker. This directly satisfies
+requirement 1 ("collect information about all the fragments... to calculate
+the total required space"): the program has no shortcut to the file's size —
+it has to actually traverse the disk to discover it.
+
+Robustness was verified explicitly, not just assumed:
+- a **broken link** (pointer to a block that doesn't exist on disk) raises `ValueError`
+- a **cycle** (chain that loops back on itself) is caught before it can hang the program
+- an **unknown start block** raises immediately
+
+### 2. Required space (`calc_required_space`)
+
+Per the assignment, this is simply `len(fragments) * block_size_kb` — no
+metadata overhead is added, exactly as specified.
+
+One deliberate design decision: the assignment's own worked example is
+internally inconsistent — it states **"File size = 8 KB"** but only lists
+**six** disk blocks (28, 5, 12, 13, 1, 4), which is 6 KB. Since the entire
+point of step 1 is to *measure* the size from the disk rather than trust a
+label, the program treats the FCB's declared size as informational only,
+computes the real size from the traversal, and **flags a warning whenever
+the two disagree** rather than silently picking one:
+
+```
+t= 12 | DISK-SCAN | 'example.dat' start_block=28 -> fragments found: [28, 5, 12, 13, 1, 4] (6 blocks x 1KB = 6KB)
+t= 12 | WARNING   | declared size in FCB was 8KB but the disk chain actually contains 6KB -- using the MEASURED value (6KB) for allocation
+```
+
+### 3. Memory allocation & liberation (Sections A & C)
+
+Section A reuses Assignment 1's memory manager verbatim (credited in
+comments): `allocate_first_fit` / `allocate_best_fit` / `allocate_worst_fit`,
+`deallocate`, and `compact` (the fragmentation-relocation routine). Section C
+adds what this assignment specifically asks for — a way to **liberate space**
+when there isn't enough:
+
+`allocate_with_liberation()` tries, in order:
+1. Direct allocation with the chosen fit strategy.
+2. If that fails but enough *total* free memory exists (just fragmented) →
+   `compact()`, then retry.
+3. If there still isn't enough *total* free memory → `liberate_space()`,
+   which evicts resident background jobs (oldest-admitted first — a simple,
+   defensible FIFO/aging stand-in for a real LRU swap-out policy, since this
+   simulation has no usage-recency data to do better) until enough space is
+   freed, then compacts and retries.
+
+This models exactly the scenario the assignment sets up: **every background
+job ends its interval in the `Sleep` state and, per the assignment's own
+note, stays resident** (a sleeping/blocked process still holds its memory —
+it isn't swapped out just because it's idle). By t = 9 the seven background
+jobs already occupy 19 of 20 KB, so the very first file request has no
+choice but to trigger real eviction — this isn't a contrived edge case, it's
+the direct consequence of the given data.
+
+## Worked run (first-fit strategy)
+
+Background jobs 1–7 are admitted at t = 1…7 (2, 3, 4, 3, 2, 3, 2 KB = 19 KB
+used, 1 KB free), and — per the note above — none of them ever depart on
+their own.
+
+**`budget.docx`** (extra test file #1) arrives at t = 9 needing 4 KB. Only
+1 KB is free, so job 1 (2 KB) and job 2 (3 KB) — the two oldest-resident jobs
+— are evicted, freeing 6 KB (5 KB of it contiguous), then the file is
+placed and released again at t = 11:
+
+```
+t=  9 | EVICT     | swapped out job:1 (2KB) to liberate space -> free=3KB
+t=  9 | EVICT     | swapped out job:2 (3KB) to liberate space -> free=6KB
+t=  9 | COMPACT   | defragmented -> jjjjjjjjjjjjjj......
+t=  9 | FILE-LOAD | 'budget.docx' (4KB) placed @frame14 -> mem[jjjjjjjjjjjjjjffff..] resident until t=11
+t= 11 | FILE-DONE | 'budget.docx' released (4KB freed) -> mem[jjjjjjjjjjjjjj......]
+```
+
+**`example.dat`** (the assignment's own worked example) arrives at t = 12
+needing 6 KB (measured, not the mislabeled 8 KB). Jobs 3–7 are still
+resident (14 KB used) and 6 KB is already free from the previous eviction —
+**no further eviction is needed**, demonstrating the "if needed" branch is
+skipped correctly when it isn't required:
+
+```
+t= 12 | FILE-LOAD | 'example.dat' (6KB) placed @frame14 -> mem[jjjjjjjjjjjjjjffffff] resident until t=16
+t= 16 | FILE-DONE | 'example.dat' released (6KB freed) -> mem[jjjjjjjjjjjjjj......]
+```
+
+**`logs.bin`** (extra test file #2) arrives at t = 18 needing 5 KB (measured;
+declared 6 KB — another intentional mismatch to double-check the warning
+logic). Again fits into the already-free 6 KB with no eviction needed:
+
+```
+t= 18 | FILE-LOAD | 'logs.bin' (5KB) placed @frame14 -> mem[jjjjjjjjjjjjjjfffff.] resident until t=24
+t= 24 | FILE-DONE | 'logs.bin' released (5KB freed) -> mem[jjjjjjjjjjjjjj......]
+```
+
+**Final state:** jobs 3, 4, 5, 6, 7 still resident (14 KB used, 6 KB free) —
+correct, since nothing ever un-evicts a swapped-out job in this model and no
+later event asks for more space than is already free.
+
+## Testing against different files (generality)
+
+Per the rubric ("works correctly for different files"), three genuinely
+different files were run through the *same* program and disk model, not
+hand-tuned separately:
+
+| File | Start block | Chain found | Computed size | Declared size | Mismatch? |
+|---|---|---|---|---|---|
+| `example.dat` (given) | 28 | 28→5→12→13→1→4 | 6 KB | 8 KB | ⚠️ yes |
+| `budget.docx` | 7 | 7→19→2→25 | 4 KB | 4 KB | matches |
+| `logs.bin` | 30 | 30→9→17→3→21 | 5 KB | 6 KB | ⚠️ yes |
+
+All three strategies (`first-fit`, `best-fit`, `worst-fit`) were run against
+this same three-file timeline (`run2_first-fit.log`, `run2_best-fit.log`,
+`run2_worst-fit.log`) and produce identical outcomes here, because — as in
+Assignment 1 — the deciding constraint at every step is *total* free memory,
+not fragmentation, so no fit policy has room to out-perform another on this
+particular dataset; they only differ in exactly *which* frame a file lands
+at, not whether/when it succeeds.
+
+Robustness was additionally verified with three deliberately broken inputs
+(see `filesim2.py`'s docstring for `collect_fragments`, and the ad-hoc tests
+run during development):
+- a chain with a **dangling pointer** to a non-existent block → rejected with a clear error
+- a **cyclic** chain → detected and rejected instead of looping forever
+- a file **larger than all of memory** (25 KB, every job evicted, still not
+  enough) → fails with a clear "does not fit in memory" error instead of
+  crashing or hanging
+
+## Files produced
+
+- `filesim2.py` — full program (disk traversal, size calculation, allocation + liberation), heavily commented
+- `background_jobs2.txt` — the initial-memory-state job table from the prompt
+- `disk_image2.txt` — simulated disk link table (block → next block) for all three test files
+- `file_requests2.txt` — file transfer requests (start block, transfer-in time, stay-until time, declared size)
+- `run2_first-fit.log`, `run2_best-fit.log`, `run2_worst-fit.log` — full event logs for all three allocation strategies
+
+########## filesim2.py ##########
+"""
+filesim2.py
+----------
+Operating Systems - File Management Project (linked disk allocation)
+
+WHAT THIS PROGRAM DOES
+=======================
+1. DISK / FRAGMENT COLLECTION
+   The disk uses *linked allocation*: a file's blocks do not need to be
+   contiguous on disk. Each block simply stores a pointer to the next block
+   belonging to the same file (like a singly linked list); only the file's
+   directory entry (FCB) needs to know the *first* block. To find out how
+   big a file really is, the OS has to walk that chain and count the blocks
+   -- that is exactly what `collect_fragments()` below does.
+
+2. REQUIRED MEMORY SPACE
+   Once every fragment has been found, the required memory space is simply
+   (number of fragments) x (block size), computed in `calc_required_space()`.
+   As the assignment states, we ignore any extra metadata overhead.
+
+3. MEMORY ALLOCATION / LIBERATION
+   The memory manager (frames, allocation/deallocation/compaction) is the
+   same model built for Assignment 1: total memory is divided into equal
+   PAGE_KB-sized frames and a contiguous run of free frames is found with a
+   configurable fit strategy (first/best/worst). Three functions from
+   Assignment 1 are reused verbatim (credited below):
+       allocate_first_fit / allocate_best_fit / allocate_worst_fit
+       deallocate
+       compact
+   This assignment adds one more capability on top: if there simply is not
+   enough *total* free memory for the incoming file (even after
+   compaction), the program must "liberate space" by evicting resident
+   background jobs -- see `liberate_space()`. This models an OS swapping a
+   blocked/sleeping process out of RAM to make room for something that
+   needs to run right now.
+
+USAGE
+=====
+    python3 filesim2.py background_jobs2.txt disk_image2.txt file_requests2.txt output.log [strategy]
+
+    strategy is one of: first-fit (default), best-fit, worst-fit
+"""
+
+import heapq
+import sys
+
+TOTAL_KB = 20          # total physical memory
+PAGE_KB = 1             # frame size == disk block size in this assignment
+NUM_FRAMES = TOTAL_KB // PAGE_KB
+DISK_BLOCK_KB = 1       # "Disk block size = 1 Kbyte"
+
+
+# ---------------------------------------------------------------------------
+# SECTION A -- reused from Assignment 1 (Memory Management Project)
+# ---------------------------------------------------------------------------
+
+def free_runs(frames):
+    """Return [(start_index, length), ...] for every contiguous run of free frames."""
+    runs = []
+    i, n = 0, len(frames)
+    while i < n:
+        if frames[i] is None:
+            j = i
+            while j < n and frames[j] is None:
+                j += 1
+            runs.append((i, j - i))
+            i = j
+        else:
+            i += 1
+    return runs
+
+
+def allocate_first_fit(frames, size):
+    """Return the start index of the FIRST free run big enough for `size`, or None."""
+    for start, length in free_runs(frames):
+        if length >= size:
+            return start
+    return None
+
+
+def allocate_best_fit(frames, size):
+    """Return the start index of the SMALLEST free run big enough for `size`, or None."""
+    candidates = [(length, start) for start, length in free_runs(frames) if length >= size]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: (t[0], t[1]))
+    return candidates[0][1]
+
+
+def allocate_worst_fit(frames, size):
+    """Return the start index of the LARGEST free run big enough for `size`, or None."""
+    candidates = [(length, start) for start, length in free_runs(frames) if length >= size]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: (-t[0], t[1]))
+    return candidates[0][1]
+
+
+ALLOCATORS = {
+    "first-fit": allocate_first_fit,
+    "best-fit": allocate_best_fit,
+    "worst-fit": allocate_worst_fit,
+}
+
+
+def place(frames, start, size, owner_key):
+    """Mark `size` consecutive frames starting at `start` as owned by `owner_key`."""
+    for i in range(start, start + size):
+        frames[i] = owner_key
+
+
+def deallocate(frames, owner_key):
+    """Free every frame owned by `owner_key`. Returns how many frames were freed."""
+    freed = 0
+    for i in range(len(frames)):
+        if frames[i] == owner_key:
+            frames[i] = None
+            freed += 1
+    return freed
+
+
+def compact(frames):
+    """
+    Relocation/"replacement" routine: slide every occupied frame down to
+    address 0 (order preserved) so all free frames merge into one block at
+    the top of memory. Used when a request fails only because of external
+    fragmentation, not a genuine lack of free space. Returns True if it
+    actually changed anything.
+    """
+    occupied = [f for f in frames if f is not None]
+    new_frames = occupied + [None] * (len(frames) - len(occupied))
+    changed = new_frames != frames
+    frames[:] = new_frames
+    return changed
+
+
+def frames_str(frames):
+    """One-character-per-frame visual snapshot of memory, '.' = free."""
+    out = []
+    for f in frames:
+        if f is None:
+            out.append(".")
+        else:
+            tag = f.split("@")[0]
+            out.append(tag[0])
+    return "".join(out)
+
+
+# ---------------------------------------------------------------------------
+# SECTION B -- NEW for Assignment 2: disk model + fragment collection
+# ---------------------------------------------------------------------------
+
+def load_disk_image(path):
+    """
+    Parse the simulated disk's link table into {block_number: next_block}.
+    next_block == -1 marks end-of-file.
+    """
+    disk_next = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            block, nxt = line.split(":")
+            disk_next[int(block)] = int(nxt)
+    return disk_next
+
+
+def load_file_requests(path):
+    """Parse (filename, start_block, transfer_time, stay_until, declared_size_kb)."""
+    requests = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            name, start_block, t_in, t_out, declared = line.split(",")
+            requests.append({
+                "name": name,
+                "start_block": int(start_block),
+                "transfer_time": int(t_in),
+                "stay_until": int(t_out),
+                "declared_kb": int(declared),
+            })
+    return requests
+
+
+def collect_fragments(disk_next, start_block):
+    """
+    Walk the linked chain of disk blocks starting at `start_block`,
+    collecting every fragment (block number) that belongs to the file.
+
+    This is step 1 of the assignment: "Collect information about all the
+    fragments of the file from the hard disk in order to calculate the
+    total required space needed for the file in memory."
+
+    Raises ValueError on a corrupt chain (a block that points to a block
+    we've never heard of, or a cycle that would loop forever) so the
+    program fails loudly and safely instead of hanging or overcounting.
+    """
+    if start_block not in disk_next:
+        raise ValueError(f"Start block {start_block} does not exist on disk")
+
+    fragments = []
+    visited = set()
+    block = start_block
+    while block != -1:
+        if block in visited:
+            raise ValueError(f"Corrupt chain: block {block} revisited (cycle detected)")
+        if block not in disk_next:
+            raise ValueError(f"Corrupt chain: block {block} referenced but not on disk")
+        visited.add(block)
+        fragments.append(block)
+        block = disk_next[block]
+    return fragments
+
+
+def calc_required_space(fragments, block_size_kb=DISK_BLOCK_KB):
+    """
+    Step 2 of the assignment: required memory space = total size of the
+    file. Per the assignment we ignore metadata overhead, so this is just
+    (number of fragments found) x (block size).
+    """
+    return len(fragments) * block_size_kb
+
+
+# ---------------------------------------------------------------------------
+# SECTION C -- NEW for Assignment 2: liberating memory space
+# ---------------------------------------------------------------------------
+
+def liberate_space(frames, resident, required_kb, now, log_lines):
+    """
+    Step 3 (the "if needed" clause): evict resident background jobs until
+    there is enough TOTAL free memory for `required_kb`, then compact so
+    that free space is contiguous.
+
+    Eviction policy: FIFO by admission order (the longest-resident job is
+    evicted first). This is a simple, defensible stand-in for a real OS's
+    swap-out policy (e.g. LRU) given that this simulation has no actual
+    recency/usage data to base a smarter decision on.
+
+    `resident` is an ordered dict: owner_key -> size_kb, in admission order.
+    Mutates `frames` and `resident` in place.
+    """
+    free_total = sum(1 for f in frames if f is None)
+    while free_total < required_kb:
+        if not resident:
+            raise RuntimeError(
+                f"t={now}: cannot free {required_kb}KB - no more jobs to evict "
+                f"and only {free_total}KB free. File does not fit in memory."
+            )
+        victim_key, victim_size = next(iter(resident.items()))
+        deallocate(frames, victim_key)
+        del resident[victim_key]
+        free_total += victim_size
+        log_lines.append(
+            f"t={now:>3} | EVICT     | swapped out {victim_key} ({victim_size}KB) "
+            f"to liberate space -> free={free_total}KB"
+        )
+
+
+def allocate_with_liberation(frames, resident, size_kb, strategy, now, log_lines):
+    """
+    Full allocation pipeline for a file:
+      1. try the chosen fit strategy directly
+      2. if that fails but enough TOTAL free memory exists -> compact, retry
+      3. if still not enough TOTAL free memory -> liberate_space(), then
+         compact if needed, then allocate
+    Returns the starting frame index where the file was placed.
+    """
+    allocate_fn = ALLOCATORS[strategy]
+
+    start = allocate_fn(frames, size_kb)
+    if start is not None:
+        return start
+
+    free_total = sum(1 for f in frames if f is None)
+    if free_total >= size_kb:
+        if compact(frames):
+            log_lines.append(f"t={now:>3} | COMPACT   | defragmented -> {frames_str(frames)}")
+        start = allocate_fn(frames, size_kb)
+        if start is not None:
+            return start
+
+    # Not enough total free memory yet -- liberate space from resident jobs.
+    liberate_space(frames, resident, size_kb, now, log_lines)
+    if compact(frames):
+        log_lines.append(f"t={now:>3} | COMPACT   | defragmented -> {frames_str(frames)}")
+    start = allocate_fn(frames, size_kb)
+    if start is None:
+        raise RuntimeError(f"t={now}: allocation failed even after liberating space (bug?)")
+    return start
+
+
+# ---------------------------------------------------------------------------
+# SECTION D -- simulation driver
+# ---------------------------------------------------------------------------
+
+def load_background_jobs(path):
+    jobs = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            jid, start, size, interval = line.split(",")
+            jobs.append({"id": jid, "start": int(start), "size": int(size), "interval": int(interval)})
+    return jobs
+
+
+def run(background_jobs, file_requests, disk_next, strategy, log_path):
+    frames = [None] * NUM_FRAMES
+    resident = {}  # owner_key ("job:<id>" or "file:<name>") -> size_kb, admission order preserved
+    log_lines = []
+
+    # Every event is (time, priority, seq, kind, payload)
+    # priority: 0 = background job admission, 1 = file transfer-in, 2 = file transfer-out
+    # (ties broken by time only where it matters; background jobs and file
+    # events in this dataset never collide on the same timestamp)
+    events = []
+    seq = 0
+    for j in background_jobs:
+        events.append((j["start"], 0, seq, "job_admit", j))
+        seq += 1
+    for req in file_requests:
+        events.append((req["transfer_time"], 1, seq, "file_in", req))
+        seq += 1
+    heapq.heapify(events)
+
+    while events:
+        time, prio, _, kind, payload = heapq.heappop(events)
+
+        if kind == "job_admit":
+            j = payload
+            key = f"job:{j['id']}"
+            start = allocate_fn_or_none = ALLOCATORS[strategy](frames, j["size"])
+            if start is None:
+                # Background jobs arrive well within capacity in this dataset,
+                # but handle the general case anyway: queue-free retry via
+                # liberation is not appropriate for background jobs (they are
+                # the ones that get liberated *for* files), so just report it.
+                log_lines.append(
+                    f"t={time:>3} | JOB-FAIL  | job {j['id']} needs {j['size']}KB, no space available"
+                )
+                continue
+            place(frames, start, j["size"], key)
+            resident[key] = j["size"]
+            log_lines.append(
+                f"t={time:>3} | JOB-ADMIT | job {j['id']} needs {j['size']}KB placed @frame{start} "
+                f"(resident/sleeping until evicted) -> mem[{frames_str(frames)}]"
+            )
+
+        elif kind == "file_in":
+            req = payload
+            name = req["name"]
+            key = f"file:{name}"
+
+            fragments = collect_fragments(disk_next, req["start_block"])
+            required_kb = calc_required_space(fragments)
+
+            log_lines.append(
+                f"t={time:>3} | DISK-SCAN | '{name}' start_block={req['start_block']} "
+                f"-> fragments found: {fragments} "
+                f"({len(fragments)} blocks x {DISK_BLOCK_KB}KB = {required_kb}KB)"
+            )
+            if required_kb != req["declared_kb"]:
+                log_lines.append(
+                    f"t={time:>3} | WARNING   | declared size in FCB was {req['declared_kb']}KB "
+                    f"but the disk chain actually contains {required_kb}KB -- "
+                    f"using the MEASURED value ({required_kb}KB) for allocation"
+                )
+
+            start = allocate_with_liberation(frames, resident, required_kb, strategy, time, log_lines)
+            place(frames, start, required_kb, key)
+            resident[key] = required_kb
+            log_lines.append(
+                f"t={time:>3} | FILE-LOAD | '{name}' ({required_kb}KB) placed @frame{start} "
+                f"-> mem[{frames_str(frames)}] resident until t={req['stay_until']}"
+            )
+            heapq.heappush(events, (req["stay_until"], 2, seq, "file_out", req))
+            seq += 1
+
+        elif kind == "file_out":
+            req = payload
+            name = req["name"]
+            key = f"file:{name}"
+            freed = deallocate(frames, key)
+            resident.pop(key, None)
+            log_lines.append(
+                f"t={time:>3} | FILE-DONE | '{name}' released ({freed}KB freed) "
+                f"-> mem[{frames_str(frames)}]"
+            )
+
+    used = sum(1 for f in frames if f is not None)
+    log_lines.append("")
+    log_lines.append("=" * 70)
+    log_lines.append(f"FINAL MEMORY STATE (strategy={strategy})")
+    log_lines.append("=" * 70)
+    log_lines.append(f"mem[{frames_str(frames)}]  used={used}/{NUM_FRAMES}KB  free={NUM_FRAMES-used}KB")
+    log_lines.append(f"Still resident: {list(resident.keys())}")
+
+    with open(log_path, "w") as f:
+        f.write("\n".join(log_lines) + "\n")
+
+    return log_lines
+
+
+if __name__ == "__main__":
+    bg_path, disk_path, req_path, out_path = sys.argv[1:5]
+    strategy = sys.argv[5] if len(sys.argv) > 5 else "first-fit"
+
+    background_jobs = load_background_jobs(bg_path)
+    file_requests = load_file_requests(req_path)
+    disk_next = load_disk_image(disk_path)
+
+    lines = run(background_jobs, file_requests, disk_next, strategy, out_path)
+    print("\n".join(lines))
+
+########## background_jobs2.txt ##########
+# Job ID, Start Time, Job required size (KB), Execution interval (s)
+# NOTE: per assignment note, every job is "Sleep" at the end of its interval.
+# Unlike Assignment 1, Sleep here means the process stays RESIDENT in memory
+# (blocked, not swapped out) -- it keeps holding its frames until something
+# else (the file-loading routine) needs to *liberate* that space.
+1,1,2,7
+2,2,3,8
+3,3,4,6
+4,4,3,6
+5,5,2,9
+6,6,3,6
+7,7,2,6
+
+########## disk_image2.txt ##########
+# Simulated disk (linked allocation). Each line: block_number:next_block
+# -1 means "end of file" (no further fragment).
+# Only blocks that currently belong to a file appear here; every other
+# block on the disk is implicitly free/unallocated space we don't track.
+
+# --- chain for FILE1 (the assignment's worked example) ---
+# FCB start block = 28. Fragments are scattered across the disk on purpose
+# (this is exactly what "linked allocation" looks like) -- the program has
+# to walk the pointers to discover them, it is not handed the list directly.
+28:5
+5:12
+12:13
+13:1
+1:4
+4:-1
+
+# --- chain for FILE2 (extra test file #1) ---
+7:19
+19:2
+2:25
+25:-1
+
+# --- chain for FILE3 (extra test file #2) ---
+30:9
+9:17
+17:3
+3:21
+21:-1
+
+########## file_requests2.txt ##########
+# filename, start_block, transfer_time, stay_until, declared_size_kb
+# declared_size_kb is the size claimed in the file's directory entry/FCB --
+# kept only so the program can cross-check it against what it actually
+# measures by walking the disk chain (see collect_fragments()). It is NOT
+# trusted for the allocation itself.
+example.dat,28,12,16,8
+budget.docx,7,9,11,4
+logs.bin,30,18,24,6
+
+########## run2_first-fit.log ##########
+t=  1 | JOB-ADMIT | job 1 needs 2KB placed @frame0 (resident/sleeping until evicted) -> mem[jj..................]
+t=  2 | JOB-ADMIT | job 2 needs 3KB placed @frame2 (resident/sleeping until evicted) -> mem[jjjjj...............]
+t=  3 | JOB-ADMIT | job 3 needs 4KB placed @frame5 (resident/sleeping until evicted) -> mem[jjjjjjjjj...........]
+t=  4 | JOB-ADMIT | job 4 needs 3KB placed @frame9 (resident/sleeping until evicted) -> mem[jjjjjjjjjjjj........]
+t=  5 | JOB-ADMIT | job 5 needs 2KB placed @frame12 (resident/sleeping until evicted) -> mem[jjjjjjjjjjjjjj......]
+t=  6 | JOB-ADMIT | job 6 needs 3KB placed @frame14 (resident/sleeping until evicted) -> mem[jjjjjjjjjjjjjjjjj...]
+t=  7 | JOB-ADMIT | job 7 needs 2KB placed @frame17 (resident/sleeping until evicted) -> mem[jjjjjjjjjjjjjjjjjjj.]
+t=  9 | DISK-SCAN | 'budget.docx' start_block=7 -> fragments found: [7, 19, 2, 25] (4 blocks x 1KB = 4KB)
+t=  9 | EVICT     | swapped out job:1 (2KB) to liberate space -> free=3KB
+t=  9 | EVICT     | swapped out job:2 (3KB) to liberate space -> free=6KB
+t=  9 | COMPACT   | defragmented -> jjjjjjjjjjjjjj......
+t=  9 | FILE-LOAD | 'budget.docx' (4KB) placed @frame14 -> mem[jjjjjjjjjjjjjjffff..] resident until t=11
+t= 11 | FILE-DONE | 'budget.docx' released (4KB freed) -> mem[jjjjjjjjjjjjjj......]
+t= 12 | DISK-SCAN | 'example.dat' start_block=28 -> fragments found: [28, 5, 12, 13, 1, 4] (6 blocks x 1KB = 6KB)
+t= 12 | WARNING   | declared size in FCB was 8KB but the disk chain actually contains 6KB -- using the MEASURED value (6KB) for allocation
+t= 12 | FILE-LOAD | 'example.dat' (6KB) placed @frame14 -> mem[jjjjjjjjjjjjjjffffff] resident until t=16
+t= 16 | FILE-DONE | 'example.dat' released (6KB freed) -> mem[jjjjjjjjjjjjjj......]
+t= 18 | DISK-SCAN | 'logs.bin' start_block=30 -> fragments found: [30, 9, 17, 3, 21] (5 blocks x 1KB = 5KB)
+t= 18 | WARNING   | declared size in FCB was 6KB but the disk chain actually contains 5KB -- using the MEASURED value (5KB) for allocation
+t= 18 | FILE-LOAD | 'logs.bin' (5KB) placed @frame14 -> mem[jjjjjjjjjjjjjjfffff.] resident until t=24
+t= 24 | FILE-DONE | 'logs.bin' released (5KB freed) -> mem[jjjjjjjjjjjjjj......]
+
+======================================================================
+FINAL MEMORY STATE (strategy=first-fit)
+======================================================================
+mem[jjjjjjjjjjjjjj......]  used=14/20KB  free=6KB
+Still resident: ['job:3', 'job:4', 'job:5', 'job:6', 'job:7']
+
+########## run2_best-fit.log ##########
+t=  1 | JOB-ADMIT | job 1 needs 2KB placed @frame0 (resident/sleeping until evicted) -> mem[jj..................]
+t=  2 | JOB-ADMIT | job 2 needs 3KB placed @frame2 (resident/sleeping until evicted) -> mem[jjjjj...............]
+t=  3 | JOB-ADMIT | job 3 needs 4KB placed @frame5 (resident/sleeping until evicted) -> mem[jjjjjjjjj...........]
+t=  4 | JOB-ADMIT | job 4 needs 3KB placed @frame9 (resident/sleeping until evicted) -> mem[jjjjjjjjjjjj........]
+t=  5 | JOB-ADMIT | job 5 needs 2KB placed @frame12 (resident/sleeping until evicted) -> mem[jjjjjjjjjjjjjj......]
+t=  6 | JOB-ADMIT | job 6 needs 3KB placed @frame14 (resident/sleeping until evicted) -> mem[jjjjjjjjjjjjjjjjj...]
+t=  7 | JOB-ADMIT | job 7 needs 2KB placed @frame17 (resident/sleeping until evicted) -> mem[jjjjjjjjjjjjjjjjjjj.]
+t=  9 | DISK-SCAN | 'budget.docx' start_block=7 -> fragments found: [7, 19, 2, 25] (4 blocks x 1KB = 4KB)
+t=  9 | EVICT     | swapped out job:1 (2KB) to liberate space -> free=3KB
+t=  9 | EVICT     | swapped out job:2 (3KB) to liberate space -> free=6KB
+t=  9 | COMPACT   | defragmented -> jjjjjjjjjjjjjj......
+t=  9 | FILE-LOAD | 'budget.docx' (4KB) placed @frame14 -> mem[jjjjjjjjjjjjjjffff..] resident until t=11
+t= 11 | FILE-DONE | 'budget.docx' released (4KB freed) -> mem[jjjjjjjjjjjjjj......]
+t= 12 | DISK-SCAN | 'example.dat' start_block=28 -> fragments found: [28, 5, 12, 13, 1, 4] (6 blocks x 1KB = 6KB)
+t= 12 | WARNING   | declared size in FCB was 8KB but the disk chain actually contains 6KB -- using the MEASURED value (6KB) for allocation
+t= 12 | FILE-LOAD | 'example.dat' (6KB) placed @frame14 -> mem[jjjjjjjjjjjjjjffffff] resident until t=16
+t= 16 | FILE-DONE | 'example.dat' released (6KB freed) -> mem[jjjjjjjjjjjjjj......]
+t= 18 | DISK-SCAN | 'logs.bin' start_block=30 -> fragments found: [30, 9, 17, 3, 21] (5 blocks x 1KB = 5KB)
+t= 18 | WARNING   | declared size in FCB was 6KB but the disk chain actually contains 5KB -- using the MEASURED value (5KB) for allocation
+t= 18 | FILE-LOAD | 'logs.bin' (5KB) placed @frame14 -> mem[jjjjjjjjjjjjjjfffff.] resident until t=24
+t= 24 | FILE-DONE | 'logs.bin' released (5KB freed) -> mem[jjjjjjjjjjjjjj......]
+
+======================================================================
+FINAL MEMORY STATE (strategy=best-fit)
+======================================================================
+mem[jjjjjjjjjjjjjj......]  used=14/20KB  free=6KB
+Still resident: ['job:3', 'job:4', 'job:5', 'job:6', 'job:7']
+
+########## run2_worst-fit.log ##########
+t=  1 | JOB-ADMIT | job 1 needs 2KB placed @frame0 (resident/sleeping until evicted) -> mem[jj..................]
+t=  2 | JOB-ADMIT | job 2 needs 3KB placed @frame2 (resident/sleeping until evicted) -> mem[jjjjj...............]
+t=  3 | JOB-ADMIT | job 3 needs 4KB placed @frame5 (resident/sleeping until evicted) -> mem[jjjjjjjjj...........]
+t=  4 | JOB-ADMIT | job 4 needs 3KB placed @frame9 (resident/sleeping until evicted) -> mem[jjjjjjjjjjjj........]
+t=  5 | JOB-ADMIT | job 5 needs 2KB placed @frame12 (resident/sleeping until evicted) -> mem[jjjjjjjjjjjjjj......]
+t=  6 | JOB-ADMIT | job 6 needs 3KB placed @frame14 (resident/sleeping until evicted) -> mem[jjjjjjjjjjjjjjjjj...]
+t=  7 | JOB-ADMIT | job 7 needs 2KB placed @frame17 (resident/sleeping until evicted) -> mem[jjjjjjjjjjjjjjjjjjj.]
+t=  9 | DISK-SCAN | 'budget.docx' start_block=7 -> fragments found: [7, 19, 2, 25] (4 blocks x 1KB = 4KB)
+t=  9 | EVICT     | swapped out job:1 (2KB) to liberate space -> free=3KB
+t=  9 | EVICT     | swapped out job:2 (3KB) to liberate space -> free=6KB
+t=  9 | COMPACT   | defragmented -> jjjjjjjjjjjjjj......
+t=  9 | FILE-LOAD | 'budget.docx' (4KB) placed @frame14 -> mem[jjjjjjjjjjjjjjffff..] resident until t=11
+t= 11 | FILE-DONE | 'budget.docx' released (4KB freed) -> mem[jjjjjjjjjjjjjj......]
+t= 12 | DISK-SCAN | 'example.dat' start_block=28 -> fragments found: [28, 5, 12, 13, 1, 4] (6 blocks x 1KB = 6KB)
+t= 12 | WARNING   | declared size in FCB was 8KB but the disk chain actually contains 6KB -- using the MEASURED value (6KB) for allocation
+t= 12 | FILE-LOAD | 'example.dat' (6KB) placed @frame14 -> mem[jjjjjjjjjjjjjjffffff] resident until t=16
+t= 16 | FILE-DONE | 'example.dat' released (6KB freed) -> mem[jjjjjjjjjjjjjj......]
+t= 18 | DISK-SCAN | 'logs.bin' start_block=30 -> fragments found: [30, 9, 17, 3, 21] (5 blocks x 1KB = 5KB)
+t= 18 | WARNING   | declared size in FCB was 6KB but the disk chain actually contains 5KB -- using the MEASURED value (5KB) for allocation
+t= 18 | FILE-LOAD | 'logs.bin' (5KB) placed @frame14 -> mem[jjjjjjjjjjjjjjfffff.] resident until t=24
+t= 24 | FILE-DONE | 'logs.bin' released (5KB freed) -> mem[jjjjjjjjjjjjjj......]
+
+======================================================================
+FINAL MEMORY STATE (strategy=worst-fit)
+======================================================================
+mem[jjjjjjjjjjjjjj......]  used=14/20KB  free=6KB
+Still resident: ['job:3', 'job:4', 'job:5', 'job:6', 'job:7']

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>StudyTrack — Task Manager Prototype</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1>StudyTrack</h1>
+    <p class="subtitle">Task Creation &amp; Management (FR1 prototype)</p>
+  </header>
+
+  <main class="app-main">
+    <section class="panel form-panel">
+      <h2>Add a Task</h2>
+      <form id="task-form" novalidate>
+        <div class="field">
+          <label for="title">Title <span class="req">*</span></label>
+          <input type="text" id="title" name="title" placeholder="e.g., Finish reading chapter 4" />
+          <span class="error" id="err-title"></span>
+        </div>
+
+        <div class="field">
+          <label for="course">Course</label>
+          <input type="text" id="course" name="course" placeholder="e.g., CS 210" />
+        </div>
+
+        <div class="field">
+          <label for="dueDate">Due Date <span class="req">*</span></label>
+          <input type="date" id="dueDate" name="dueDate" />
+          <span class="error" id="err-dueDate"></span>
+        </div>
+
+        <div class="field">
+          <label for="priority">Priority</label>
+          <select id="priority" name="priority">
+            <option value="Low">Low</option>
+            <option value="Medium" selected>Medium</option>
+            <option value="High">High</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="description">Description</label>
+          <textarea id="description" name="description" rows="2" placeholder="Optional details"></textarea>
+        </div>
+
+        <button type="submit" id="submit-btn">Add Task</button>
+        <p class="status" id="form-status" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section class="panel list-panel">
+      <div class="list-header">
+        <h2>My Tasks</h2>
+        <div class="filters">
+          <label>
+            Filter by course:
+            <select id="course-filter">
+              <option value="">All</option>
+            </select>
+          </label>
+          <label>
+            <input type="checkbox" id="hide-complete" />
+            Hide completed
+          </label>
+        </div>
+      </div>
+      <ul id="task-list" class="task-list"></ul>
+      <p id="empty-state" class="empty-state">No tasks yet — add your first task on the left.</p>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <p>Data is stored locally in your browser (localStorage). Clearing browser storage will remove all tasks.</p>
+  </footer>
+
+  <script src="taskStore.js"></script>
+  <script src="taskController.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

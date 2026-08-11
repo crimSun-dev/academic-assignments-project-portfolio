@@ -1,0 +1,153 @@
+:root {
+  --blue: #2f5fb3;
+  --blue-dark: #1f3f7a;
+  --bg: #f4f6fb;
+  --panel: #ffffff;
+  --border: #d7deed;
+  --text: #1e2430;
+  --muted: #6b7385;
+  --danger: #c0392b;
+  --high: #e0574c;
+  --medium: #e0a83c;
+  --low: #4c9f70;
+  font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app-header {
+  background: linear-gradient(135deg, var(--blue), var(--blue-dark));
+  color: white;
+  padding: 24px 32px;
+}
+.app-header h1 { margin: 0; font-size: 26px; letter-spacing: 0.5px; }
+.app-header .subtitle { margin: 4px 0 0; font-size: 14px; opacity: 0.9; }
+
+.app-main {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 20px;
+  padding: 24px 32px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+  box-shadow: 0 1px 3px rgba(20, 30, 60, 0.06);
+}
+
+.panel h2 { margin-top: 0; font-size: 17px; color: var(--blue-dark); }
+
+.field { margin-bottom: 12px; display: flex; flex-direction: column; gap: 4px; }
+.field label { font-size: 13px; font-weight: 600; color: var(--text); }
+.req { color: var(--danger); }
+.field input, .field select, .field textarea {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+}
+.field input:focus, .field select:focus, .field textarea:focus {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+.error { color: var(--danger); font-size: 12px; min-height: 14px; }
+
+#submit-btn {
+  background: var(--blue);
+  color: white;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+}
+#submit-btn:hover { background: var(--blue-dark); }
+
+.status { font-size: 13px; min-height: 16px; margin: 8px 0 0; }
+.status.success { color: var(--low); }
+.status.error { color: var(--danger); }
+
+.list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.filters { display: flex; gap: 16px; align-items: center; font-size: 13px; color: var(--muted); }
+.filters select { padding: 4px 6px; border-radius: 5px; border: 1px solid var(--border); }
+
+.task-list { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+
+.task-item {
+  border: 1px solid var(--border);
+  border-left: 5px solid var(--medium);
+  border-radius: 8px;
+  padding: 10px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.task-item.priority-High { border-left-color: var(--high); }
+.task-item.priority-Medium { border-left-color: var(--medium); }
+.task-item.priority-Low { border-left-color: var(--low); }
+.task-item.completed { opacity: 0.55; }
+.task-item.completed .task-title { text-decoration: line-through; }
+
+.task-main { flex: 1; }
+.task-title { font-weight: 600; font-size: 15px; }
+.task-meta { font-size: 12px; color: var(--muted); margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; }
+.task-desc { font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+.badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: white;
+}
+.badge.High { background: var(--high); }
+.badge.Medium { background: var(--medium); }
+.badge.Low { background: var(--low); }
+
+.task-actions { display: flex; flex-direction: column; gap: 6px; }
+.task-actions button {
+  border: 1px solid var(--border);
+  background: white;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.task-actions button.complete-btn { color: var(--low); }
+.task-actions button.delete-btn { color: var(--danger); }
+.task-actions button:hover { background: var(--bg); }
+
+.empty-state { color: var(--muted); font-size: 14px; margin-top: 14px; }
+
+.app-footer {
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 16px;
+}
+
+@media (max-width: 760px) {
+  .app-main { grid-template-columns: 1fr; }
+}

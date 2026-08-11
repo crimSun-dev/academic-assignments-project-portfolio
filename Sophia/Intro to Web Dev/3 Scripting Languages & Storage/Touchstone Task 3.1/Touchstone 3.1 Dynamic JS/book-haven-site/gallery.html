@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Book Haven Bookstore - Gallery</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+    <!-- Header Section -->
+    <header>
+        <img src="images/logo.png" alt="Book Haven Bookstore Logo" width="80">
+        <h1>Book Haven Bookstore</h1>
+        <nav>
+            <a href="index.html">Home</a>
+            <a href="gallery.html">Gallery</a>
+            <a href="about.html">About Us / Contact</a>
+            <a href="events.html">Events &amp; Community</a>
+        </nav>
+    </header>
+
+    <!-- Main Content -->
+    <main>
+
+        <h2>Our Products</h2>
+
+        <table class="gallery-table">
+            <!-- Row 1 -->
+            <tr>
+                <td align="center">
+                    <img src="images/brie-mine-4ever.jpg" alt="Brie Mine 4Ever book" width="150">
+                    <p><strong>Brie Mine 4Ever</strong></p>
+                    <p>A delightful book for cheese lovers featuring recipes and stories.</p>
+                    <button class="add-to-cart-btn">Add to Cart</button>
+                </td>
+                <td align="center">
+                    <img src="images/glory-riders.jpg" alt="Glory Riders book" width="150">
+                    <p><strong>Glory Riders</strong></p>
+                    <p>An exciting tale about bikers on an epic cross-country journey.</p>
+                    <button class="add-to-cart-btn">Add to Cart</button>
+                </td>
+                <td align="center">
+                    <img src="images/sorcerers-shadowed-chronicles.jpg" alt="Sorcerer's Shadowed Chronicles book" width="150">
+                    <p><strong>Sorcerer's Shadowed Chronicles</strong></p>
+                    <p>A gripping fantasy adventure filled with magic and mystery.</p>
+                    <button class="add-to-cart-btn">Add to Cart</button>
+                </td>
+            </tr>
+            <!-- Row 2 -->
+            <tr>
+                <td align="center">
+                    <img src="images/ball-magazine.jpg" alt="Ball magazine" width="150">
+                    <p><strong>Ball Magazine</strong></p>
+                    <p>The ultimate magazine for pickleball enthusiasts of all levels.</p>
+                    <button class="add-to-cart-btn">Add to Cart</button>
+                </td>
+                <td align="center">
+                    <img src="images/travel-magazine.jpg" alt="Travel magazine" width="150">
+                    <p><strong>Travel Magazine</strong></p>
+                    <p>A magazine for travelers seeking inspiration and destination guides.</p>
+                    <button class="add-to-cart-btn">Add to Cart</button>
+                </td>
+                <td align="center">
+                    <img src="images/eat-magazine.jpg" alt="Eat magazine" width="150">
+                    <p><strong>Eat. Magazine</strong></p>
+                    <p>A foodie magazine packed with recipes, reviews, and culinary trends.</p>
+                    <button class="add-to-cart-btn">Add to Cart</button>
+                </td>
+            </tr>
+            <!-- Row 3 -->
+            <tr>
+                <td align="center">
+                    <img src="images/tote-bag.jpg" alt="Canvas tote bag" width="150">
+                    <p><strong>Canvas Tote Bag</strong></p>
+                    <p>Stylish tote bag with "ALL I DO IS READ READ READ" lettering.</p>
+                    <button class="add-to-cart-btn">Add to Cart</button>
+                </td>
+                <td align="center">
+                    <img src="images/notebook.jpg" alt="Book Haven notebook" width="150">
+                    <p><strong>Book Haven Notebook</strong></p>
+                    <p>A premium notebook featuring the Book Haven Bookstore name on the cover.</p>
+                    <button class="add-to-cart-btn">Add to Cart</button>
+                </td>
+                <td align="center">
+                    <img src="images/stickers.jpg" alt="Book Haven stickers" width="150">
+                    <p><strong>Reading Stickers (Set of 4)</strong></p>
+                    <p>A fun set of four Book Haven Bookstore stickers that promote reading.</p>
+                    <button class="add-to-cart-btn">Add to Cart</button>
+                </td>
+            </tr>
+        </table>
+
+        <!-- Cart Action Buttons -->
+        <div class="cart-actions" style="text-align: center; margin-top: 30px; margin-bottom: 20px;">
+            <button id="clear-cart-btn">Clear Cart</button>
+            <button id="process-order-btn">Process Order</button>
+        </div>
+
+    </main>
+
+    <!-- Footer Section -->
+    <footer>
+        <div>
+            <h3>Subscribe to Our Newsletter</h3>
+            <form id="subscribe-form">
+                <input type="email" name="email" placeholder="Enter your email address" required>
+                <button type="submit" id="subscribe-btn">Subscribe</button>
+            </form>
+        </div>
+        <div>
+            <h3>Follow Us</h3>
+            <a href="#">Facebook</a>
+            <a href="#">Instagram</a>
+            <a href="#">Twitter</a>
+        </div>
+        <nav>
+            <a href="index.html">Home</a>
+            <a href="gallery.html">Gallery</a>
+            <a href="about.html">About Us / Contact</a>
+            <a href="events.html">Events &amp; Community</a>
+        </nav>
+        <p>&copy; 2026 Book Haven Bookstore. All rights reserved.</p>
+    </footer>
+
+    <!-- JavaScript for Gallery Page Alerts -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Add to Cart buttons click event
+            var addToCartButtons = document.querySelectorAll('.add-to-cart-btn');
+            addToCartButtons.forEach(function(button) {
+                button.addEventListener('click', function() {
+                    alert("Item added to the cart.");
+                });
+            });
+
+            // Clear Cart button click event
+            var clearCartBtn = document.getElementById('clear-cart-btn');
+            clearCartBtn.addEventListener('click', function() {
+                alert("Cart cleared.");
+            });
+
+            // Process Order button click event
+            var processOrderBtn = document.getElementById('process-order-btn');
+            processOrderBtn.addEventListener('click', function() {
+                alert("Thank you for your order.");
+            });
+
+            // Subscribe button click event
+            var subscribeForm = document.getElementById('subscribe-form');
+            subscribeForm.addEventListener('submit', function(event) {
+                event.preventDefault();
+                alert("Thank you for subscribing.");
+            });
+        });
+    </script>
+
+</body>
+</html>

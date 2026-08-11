@@ -1,0 +1,2360 @@
+OS REAL-TIME SCHEDULING PROJECT (RM / DM / EDF) - COMBINED SUBMISSION
+=========================================================================
+
+########## REPORT3.md ##########
+# OS Real-Time Scheduling Project — RM / DM / EDF (Assignment 3)
+
+## Design overview
+
+`rts_sim3.py` is a genuine **next-event, preemptive** simulator: the clock
+never advances by a fixed tick. At every step it looks only as far ahead as
+the next thing that could possibly change who should be running — either a
+new periodic job arriving, or the currently running job finishing — jumps
+straight there, and re-evaluates. This means an arriving higher-priority job
+correctly preempts a running lower-priority one on the very next loop
+iteration, without the simulator ever needing to "poll" time in between.
+
+The three policies (RM, DM, EDF) share 100% of the simulation engine — the
+*only* thing that differs between them is a three-line priority function:
+
+```python
+def priority_key_rm(job, proc_by_id):   return (proc_by_id[job.pid].period, job.pid)
+def priority_key_dm(job, proc_by_id):   return (proc_by_id[job.pid].rel_deadline, job.pid)
+def priority_key_edf(job, proc_by_id):  return (job.abs_deadline, job.pid)
+```
+RM and DM are **fixed-priority**: a process's priority never changes.
+EDF is **dynamic**: each individual *job* (one periodic release) carries its
+own absolute deadline, and the ready job with the soonest one always wins —
+this is why EDF needs the general "compute priority per job", not just
+"compute priority per process".
+
+## A required design decision: service (execution) time
+
+The assignment's input table only lists Process Number, Arrival Time,
+Relative Deadline, and Period. None of RM, DM, or EDF can actually be
+simulated without also knowing how long each job runs for (usually written
+`C_i`) — you cannot decide who has priority to *finish* on time, or measure
+CPU load, without it. The assignment text acknowledges this gap itself
+("this program doesn't specify certain service times... following are some
+suggestions... in milliseconds"), so a 5th column, **ServiceTime**, was added
+to the input file format, and every input file used here documents in its
+own header comment exactly how that column's values were chosen and why.
+
+The "0 to 101 / 0 to 413 / 0 to 500 ms" figures given in the prompt were
+used as the **simulation horizon** (how long each policy is simulated for),
+not as a per-process burst time — RM gets the shortest observation window
+because it is the least capable of the three policies and tends to fail
+fastest if it's going to fail at all; EDF gets the longest because it is the
+theoretically strongest of the three (feasible for any workload with total
+utilization ≤ 100%) and deserves the most room to prove it.
+
+## Three test files
+
+### 1. `sample_given3.txt` — the assignment's own worked numbers
+The Process/Arrival/Deadline/Period columns are copied exactly from the
+prompt; service times were synthesized as `C_i = round(0.5 * D_i)` (a
+process can't sensibly need *more* time than its own deadline allows when
+running alone, so this is a defensible lower-effort default). This happens
+to produce a heavily **overloaded** system — total utilization ≈ 138% — so
+it serves as the clean "this cannot possibly be scheduled" baseline.
+
+**Result: all three policies fail almost immediately**, and identically —
+first miss at t = 10 (process 3) in every case. This is expected and
+correct: when total utilization exceeds 100%, *no* scheduling algorithm
+(however smart) can meet every deadline — RM, DM, and EDF only differ in how
+gracefully or how differently they fail, never in whether an overloaded
+system succeeds.
+
+| | RM | DM | EDF |
+|---|---|---|---|
+| Feasible until | t=10 | t=10 | t=10 |
+| First miss | Process 3 | Process 3 | Process 3 |
+| Total misses (over its horizon) | 9 | 37 | 117 |
+| CPU utilization | 100% | 100% | 100% |
+
+### 2. `custom_input3.txt` — our own set, total utilization exactly 1.0
+Five tasks (periods 20/25/30/40/50, one with a constrained deadline < period)
+chosen so `sum(C_i / T_i) = 1.00` exactly — the theoretical boundary at
+which EDF is *just barely* still guaranteed feasible (EDF is feasible iff
+utilization ≤ 100%, a necessary-and-sufficient condition), while RM's
+classical Liu & Layland sufficient bound for 5 tasks (≈ 74.3%) is
+comfortably exceeded.
+
+**Result: matches theory precisely.**
+
+| | RM | DM | EDF |
+|---|---|---|---|
+| Feasible until | t=35 (Process 4 misses) | t=35 (Process 4 misses) | **entire 500-unit window** |
+| Total misses | 3 | 9 | **0** |
+| CPU utilization | 100% | 100% | 100% |
+
+RM and DM fail at the *same* point here because, for this particular task
+set, their priority orders happen to coincide (periods and relative
+deadlines are ranked the same way across all 5 processes) — a useful,
+honest result in itself, but it doesn't showcase what's supposed to be
+different about DM, which is why a second custom file was built.
+
+### 3. `custom_input2_3.txt` — engineered to make RM and DM genuinely diverge
+Process 1 (period 10, deadline 9, service 5) and Process 2 (period 12,
+deadline 6, service 2) are constructed so their **period order and deadline
+order are opposite**: RM (period-based) ranks P1 above P2, so it always runs
+P1 first — for 5 units — before P2 gets a chance to even start, and P2 (due
+at t = 6) doesn't finish until t = 7. DM (deadline-based) ranks P2 above P1,
+runs the *tighter* deadline first, and both finish comfortably inside their
+deadlines. Same two jobs, same total work, opposite order.
+
+```
+RM : t=0 P1 runs (priority: shorter period) -> finishes t=5 (deadline 9, OK)
+     t=5 P2 finally runs -> finishes t=7  ***DEADLINE WAS 6 -- MISSED***
+
+DM : t=0 P2 runs (priority: shorter deadline) -> finishes t=2 (deadline 6, OK)
+     t=2 P1 runs -> finishes t=7 (deadline 9, OK)
+```
+
+**Result: exactly the textbook gap between the two policies.**
+
+| | RM | DM | EDF |
+|---|---|---|---|
+| Feasible until | **t=6 (Process 2 misses)** | **entire 413-unit window** | **entire 500-unit window** |
+| Total misses | 2 | **0** | **0** |
+| CPU utilization | 80.2% | 78.5% | 77.8% |
+
+This is the cleanest possible demonstration of *why* Deadline Monotonic
+exists: RM's optimality among fixed-priority policies is only proven for
+the case where every relative deadline equals its period; the moment a
+process has a deadline meaningfully shorter than its period, RM's
+period-only ranking can starve it, and DM's deadline-based ranking fixes
+exactly that.
+
+## Summary — answering the assignment's three questions
+
+- **Can a feasible schedule be created?** Yes for EDF in every test here
+  where total utilization ≤ 100% (custom_input3.txt, custom_input2_3.txt).
+  DM also achieves a fully feasible schedule whenever RM's fixed period-only
+  priority isn't the actual bottleneck (custom_input2_3.txt). RM was the only
+  policy to fail on a workload (custom_input2_3.txt) that both DM and EDF
+  handled without a single miss.
+- **When does scheduling fail?** Always exactly when total utilization
+  exceeds what the policy can guarantee: overload (>100%) breaks all three
+  policies identically (sample_given3.txt); at exactly 100% utilization only
+  EDF is theoretically guaranteed and is the only one that held
+  (custom_input3.txt); and even well under 100% utilization, RM alone can
+  still fail purely because of *how* it assigns priority when deadlines are
+  shorter than periods (custom_input2_3.txt) — a failure mode DM was
+  specifically designed to close.
+- **CPU load/use:** reported per run above as both raw busy-time units and a
+  percentage of the simulated horizon; an overloaded system pegs at 100%
+  utilization for every policy (there's always more ready work than CPU
+  time), while a well-provisioned system settles near its true total
+  utilization once the schedule stabilizes.
+
+## Files produced
+
+- `rts_sim3.py` — the simulator (heavily commented: data model, priority
+  functions, the event-driven engine itself, and report formatting are each
+  documented inline)
+- `sample_given3.txt`, `custom_input3.txt`, `custom_input2_3.txt` — the three input files (see each file's own header comment for how its numbers were chosen)
+- `sample_given3_results.log`, `custom_input3_results.log`, `custom_input2_3_results.log` — full chronological event traces plus the RM/DM/EDF summary block for each input file (9 total algorithm runs across the 3 files)
+
+########## rts_sim3.py ##########
+"""
+rts_sim3.py
+----------
+Operating Systems - Real-Time Scheduling Project
+
+Implements a NEXT-EVENT (event-driven) simulator for three classic
+real-time scheduling policies:
+
+    RM  - Rate Monotonic          (fixed priority, shorter PERIOD = higher priority)
+    DM  - Deadline Monotonic      (fixed priority, shorter RELATIVE DEADLINE = higher priority)
+    EDF - Earliest Deadline First (dynamic priority, earliest ABSOLUTE deadline
+                                    of a job currently in the system = highest priority)
+
+All three are PREEMPTIVE: a higher-priority job that arrives while a
+lower-priority job is running immediately takes over the CPU; the
+preempted job's remaining service time is saved and it resumes later.
+
+------------------------------------------------------------------------
+WHY THIS FILE ADDS A "SERVICE TIME" COLUMN
+------------------------------------------------------------------------
+The assignment's input table only lists Process Number, Arrival Time,
+Relative Deadline and Period. That is not enough information to schedule
+anything: every one of RM/DM/EDF needs to know how long each job actually
+executes (its service/execution time, usually written C_i in scheduling
+literature) to decide who runs next or whether a deadline was met. The
+assignment text itself acknowledges this ("this program doesn't specify
+certain service times... following are some suggestions... in
+milliseconds"), so a 5th column (ServiceTime) was added to the input file
+format. See the two input files in this project for how that value was
+chosen for the assignment's own sample vs. for our own custom test set.
+
+------------------------------------------------------------------------
+EVENT-DRIVEN SIMULATION DESIGN
+------------------------------------------------------------------------
+Rather than a fixed-timestep ("tick") simulation, the clock jumps directly
+from one meaningful event to the next:
+    - a new job (periodic task instance) ARRIVES, or
+    - the currently running job COMPLETES.
+Between events nothing about *who should be running* can change, so we
+never need to inspect time in between. At every event the simulator:
+    1. figures out which ready job has the highest priority under the
+       policy being simulated,
+    2. runs it until either the next arrival or its own completion,
+       whichever comes first (this naturally implements preemption -- if
+       a higher-priority job arrives before the current one finishes, the
+       next loop iteration picks the new arrival instead),
+    3. records completions and (crucially) deadline misses,
+    4. repeats until the simulation horizon is reached.
+"""
+
+import heapq
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+
+# ---------------------------------------------------------------------------
+# DATA MODEL
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ProcessDef:
+    """Static definition of a periodic process, as read from the input file."""
+    pid: int
+    arrival: int          # first release time (assignment says: always 0)
+    rel_deadline: int      # D_i - time allowed to finish AFTER release
+    period: int             # T_i - time between successive releases
+    service: int            # C_i - execution/service time per job (added column)
+
+
+@dataclass
+class Job:
+    """One periodic *instance* (release) of a process -- what actually gets scheduled."""
+    pid: int
+    release_time: int
+    abs_deadline: int
+    service_time: int
+    remaining: int
+    finish_time: Optional[int] = None
+    missed: bool = False
+    miss_time: Optional[int] = None
+
+
+def load_processes(path):
+    """
+    Parse an input file:
+        line 1: "<num_processes> <process_switch_overhead>"
+        lines 2..N+1: "<pid> <arrival> <rel_deadline> <period> <service>"
+    Comment lines starting with '#' and blank lines are ignored.
+    """
+    processes = []
+    switch_overhead = 0
+    num_processes = 0
+    header_seen = False
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if not header_seen:
+                num_processes, switch_overhead = int(parts[0]), int(parts[1])
+                header_seen = True
+                continue
+            pid, arrival, rel_deadline, period, service = map(int, parts)
+            processes.append(ProcessDef(pid, arrival, rel_deadline, period, service))
+    assert len(processes) == num_processes, (
+        f"Header declared {num_processes} processes but {len(processes)} were listed"
+    )
+    return processes, switch_overhead
+
+
+# ---------------------------------------------------------------------------
+# PRIORITY FUNCTIONS -- this is literally the only difference between the
+# three algorithms; everything else in the simulator is shared code.
+# ---------------------------------------------------------------------------
+
+def priority_key_rm(job, proc_by_id):
+    """Rate Monotonic: fixed priority by PERIOD. Shorter period => smaller key => runs first."""
+    return (proc_by_id[job.pid].period, job.pid)
+
+
+def priority_key_dm(job, proc_by_id):
+    """Deadline Monotonic: fixed priority by RELATIVE deadline. Shorter D_i => runs first."""
+    return (proc_by_id[job.pid].rel_deadline, job.pid)
+
+
+def priority_key_edf(job, proc_by_id):
+    """Earliest Deadline First: dynamic priority by this job's own ABSOLUTE deadline."""
+    return (job.abs_deadline, job.pid)
+
+
+PRIORITY_FUNCS = {"RM": priority_key_rm, "DM": priority_key_dm, "EDF": priority_key_edf}
+
+
+# ---------------------------------------------------------------------------
+# SIMULATION ENGINE
+# ---------------------------------------------------------------------------
+
+def generate_arrivals(processes, horizon):
+    """
+    Pre-compute every job release for every process up to `horizon`.
+    Per the assignment, arrival (first release) is always 0 regardless of
+    algorithm; subsequent releases repeat every `period`.
+    Returns a flat list of Job objects sorted by release_time.
+    """
+    jobs = []
+    for p in processes:
+        k = 0
+        t = p.arrival
+        while t < horizon:
+            jobs.append(Job(
+                pid=p.pid,
+                release_time=t,
+                abs_deadline=t + p.rel_deadline,
+                service_time=p.service,
+                remaining=p.service,
+            ))
+            k += 1
+            t = p.arrival + k * p.period
+    jobs.sort(key=lambda j: (j.release_time, j.pid))
+    return jobs
+
+
+def simulate(processes, switch_overhead, algorithm, horizon, log_lines):
+    """
+    Run one full event-driven simulation of `algorithm` (RM/DM/EDF) over
+    [0, horizon). Returns a dict with feasibility/CPU-usage/per-process
+    results ready to print or format into the assignment's report style.
+    """
+    proc_by_id = {p.pid: p for p in processes}
+    priority_key = PRIORITY_FUNCS[algorithm]
+
+    all_jobs = generate_arrivals(processes, horizon)
+    arrival_idx = 0                 # pointer into all_jobs, sorted by release_time
+    ready: List[Job] = []            # jobs that have arrived but not finished
+    finished_jobs: List[Job] = []
+    current_time = 0
+    cpu_busy_time = 0
+    switch_time_total = 0
+    last_running_pid = None
+    first_miss = None                # (time, pid) of the first deadline miss, if any
+
+    def pull_arrivals_up_to(t):
+        nonlocal arrival_idx
+        while arrival_idx < len(all_jobs) and all_jobs[arrival_idx].release_time <= t:
+            ready.append(all_jobs[arrival_idx])
+            log_lines.append(
+                f"t={all_jobs[arrival_idx].release_time:>4} | ARRIVE | "
+                f"P{all_jobs[arrival_idx].pid} job released, "
+                f"deadline={all_jobs[arrival_idx].abs_deadline}, "
+                f"service={all_jobs[arrival_idx].service_time}"
+            )
+            arrival_idx += 1
+
+    def check_deadline_misses(t):
+        nonlocal first_miss
+        for j in ready:
+            if not j.missed and j.remaining > 0 and t > j.abs_deadline:
+                j.missed = True
+                j.miss_time = j.abs_deadline
+                log_lines.append(
+                    f"t={j.abs_deadline:>4} | MISS   | P{j.pid} missed its deadline "
+                    f"(remaining={j.remaining} at deadline)"
+                )
+                if first_miss is None:
+                    first_miss = (j.abs_deadline, j.pid)
+
+    # jobs that arrive exactly at t=0
+    pull_arrivals_up_to(0)
+
+    while current_time < horizon:
+        check_deadline_misses(current_time)
+        ready[:] = [j for j in ready if j.remaining > 0]  # drop completed
+
+        if not ready:
+            # idle -- jump straight to the next arrival (event-driven: skip empty time)
+            if arrival_idx >= len(all_jobs):
+                break  # nothing left to do at all
+            next_t = min(all_jobs[arrival_idx].release_time, horizon)
+            current_time = next_t
+            pull_arrivals_up_to(current_time)
+            continue
+
+        # pick the highest-priority ready job under this algorithm
+        running = min(ready, key=lambda j: priority_key(j, proc_by_id))
+
+        # context-switch overhead if the CPU is handing off to a different process
+        if switch_overhead > 0 and last_running_pid is not None and last_running_pid != running.pid:
+            overhead = min(switch_overhead, horizon - current_time)
+            current_time += overhead
+            switch_time_total += overhead
+            cpu_busy_time += overhead
+            log_lines.append(f"t={current_time:>4} | SWITCH | overhead={overhead} (P{last_running_pid}->P{running.pid})")
+            check_deadline_misses(current_time)
+
+        next_arrival_time = all_jobs[arrival_idx].release_time if arrival_idx < len(all_jobs) else horizon
+        completion_time = current_time + running.remaining
+        next_event_time = min(next_arrival_time, completion_time, horizon)
+
+        elapsed = next_event_time - current_time
+        if elapsed > 0:
+            running.remaining -= elapsed
+            cpu_busy_time += elapsed
+            current_time = next_event_time
+        else:
+            # simultaneous arrival/completion at the same instant -- still must
+            # advance to avoid an infinite loop; nothing to execute this tick
+            current_time = next_event_time
+
+        last_running_pid = running.pid
+
+        if running.remaining <= 0 and running.finish_time is None:
+            running.finish_time = current_time
+            finished_jobs.append(running)
+            late = current_time > running.abs_deadline
+            log_lines.append(
+                f"t={current_time:>4} | FINISH | P{running.pid} job "
+                f"(released {running.release_time}) done "
+                f"{'-- LATE' if late else '(on time)'} (deadline was {running.abs_deadline})"
+            )
+            if late and not running.missed:
+                running.missed = True
+                running.miss_time = running.abs_deadline
+                if first_miss is None:
+                    first_miss = (running.abs_deadline, running.pid)
+
+        if current_time >= horizon:
+            break
+        pull_arrivals_up_to(current_time)
+
+    check_deadline_misses(current_time)
+
+    total_misses = sum(1 for j in all_jobs if j.missed) + sum(
+        1 for j in finished_jobs if j.finish_time is not None and j.finish_time > j.abs_deadline and not j.missed
+    )
+    # (finished_jobs late ones are already flagged missed above; keep this simple/robust)
+    total_misses = len({(j.pid, j.release_time) for j in all_jobs if j.missed})
+
+    feasible_until = first_miss[0] if first_miss else horizon
+    utilization_pct = 100.0 * cpu_busy_time / horizon if horizon else 0.0
+
+    # per-process report: arrival, service, period, list of finish times
+    per_process = []
+    for p in processes:
+        finishes = [j.finish_time for j in all_jobs if j.pid == p.pid and j.finish_time is not None]
+        per_process.append({
+            "pid": p.pid,
+            "arrival": p.arrival,
+            "service": p.service,
+            "period": p.period,
+            "rel_deadline": p.rel_deadline,
+            "finishes": finishes,
+            "missed_count": sum(1 for j in all_jobs if j.pid == p.pid and j.missed),
+        })
+
+    return {
+        "algorithm": algorithm,
+        "horizon": horizon,
+        "feasible_until": feasible_until,
+        "first_miss": first_miss,
+        "total_misses": total_misses,
+        "cpu_busy_time": cpu_busy_time,
+        "switch_time_total": switch_time_total,
+        "utilization_pct": utilization_pct,
+        "per_process": per_process,
+    }
+
+
+# ---------------------------------------------------------------------------
+# REPORT FORMATTING -- mirrors the style shown in the assignment prompt
+# ---------------------------------------------------------------------------
+
+def format_report(result):
+    lines = []
+    algo = result["algorithm"]
+    lines.append(f"{algo} Results:")
+    lines.append("")
+    if result["first_miss"]:
+        t_miss, pid_miss = result["first_miss"]
+        lines.append(
+            f"Schedule feasible from 0 to {result['feasible_until']} units. "
+            f"At {t_miss}, process {pid_miss} did not meet deadline. "
+            f"CPU time took {result['cpu_busy_time']} units "
+            f"(simulated for {result['horizon']} units, "
+            f"{result['utilization_pct']:.1f}% utilization, "
+            f"{result['total_misses']} total deadline miss(es)."
+        )
+    else:
+        lines.append(
+            f"Schedule feasible for the entire simulated window (0 to {result['horizon']} units). "
+            f"No deadlines missed. CPU time took {result['cpu_busy_time']} units "
+            f"({result['utilization_pct']:.1f}% utilization)."
+        )
+    lines.append("")
+    for pp in result["per_process"]:
+        finishes_str = ", ".join(str(f) for f in pp["finishes"]) if pp["finishes"] else "(none completed)"
+        miss_note = f"  [{pp['missed_count']} missed]" if pp["missed_count"] else ""
+        lines.append(
+            f"Process {pp['pid']}: Arrival Time: {pp['arrival']}, Service: {pp['service']}, "
+            f"Relative Deadline: {pp['rel_deadline']}, Period: {pp['period']}, "
+            f"finish: {finishes_str}.{miss_note}"
+        )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# DRIVER
+# ---------------------------------------------------------------------------
+
+# Suggested simulation horizons from the assignment prompt (milliseconds)
+HORIZONS = {"RM": 101, "DM": 413, "EDF": 500}
+
+
+def run_all(input_path, out_path):
+    processes, switch_overhead = load_processes(input_path)
+
+    full_log = []
+    full_log.append(f"INPUT FILE: {input_path}")
+    full_log.append(f"Processes: {len(processes)}, switch overhead: {switch_overhead}")
+    full_log.append("")
+
+    results = {}
+    for algo in ("RM", "DM", "EDF"):
+        horizon = HORIZONS[algo]
+        event_log = []
+        result = simulate(processes, switch_overhead, algo, horizon, event_log)
+        results[algo] = result
+
+        # Events are appended in the order the simulator discovers them, which
+        # is not always strict chronological order (e.g. a deadline-miss check
+        # can log a miss at an earlier timestamp than a FINISH already printed
+        # for a different job this same iteration). Stable-sort by the "t=NNN"
+        # prefix so the printed trace reads top-to-bottom in real time order,
+        # purely for readability -- it does not affect simulation results.
+        def event_time(line):
+            return int(line.split("|", 1)[0].strip().split("=")[1])
+        event_log_sorted = sorted(event_log, key=event_time)
+
+        full_log.append("=" * 78)
+        full_log.append(f"{algo}  (simulated horizon = {horizon} units)")
+        full_log.append("=" * 78)
+        full_log.append("--- Event trace (sorted chronologically) ---")
+        full_log.extend(event_log_sorted)
+        full_log.append("")
+        full_log.append("--- Summary ---")
+        full_log.append(format_report(result))
+        full_log.append("")
+
+    with open(out_path, "w") as f:
+        f.write("\n".join(full_log) + "\n")
+
+    return results
+
+
+if __name__ == "__main__":
+    import sys
+    in_path = sys.argv[1]
+    out_path = sys.argv[2]
+    run_all(in_path, out_path)
+    print(f"Wrote {out_path}")
+
+########## sample_given3.txt ##########
+# Format: ProcessNumber ArrivalTime RelativeDeadline Period ServiceTime
+# Header: NumberOfProcesses ProcessSwitchOverhead
+#
+# This is the assignment's own worked example (Process/Arrival/Deadline/Period
+# columns copied verbatim). It does NOT include a service/execution time for
+# each process -- but RM, DM and EDF are all *impossible* to simulate without
+# one (you cannot decide who runs, or whether a deadline is met, without
+# knowing how long each job takes to execute). Since the assignment explicitly
+# says service time "isn't specified" and leaves it to us, a 5th column was
+# added here with a synthesized value: C_i = round(0.5 * RelativeDeadline_i).
+# This keeps every C_i <= D_i (a sane lower bound - a job that already can't
+# finish inside its own deadline running alone is a degenerate/pointless test
+# case), while still producing a genuinely overloaded system overall (total
+# utilization ~138%) so this file serves as the "does scheduling fail" case.
+5 0
+1 0 8 12 4
+2 0 10 20 5
+3 0 10 25 5
+4 0 15 28 8
+5 0 20 32 10
+
+########## custom_input3.txt ##########
+# Format: ProcessNumber ArrivalTime RelativeDeadline Period ServiceTime
+# Header: NumberOfProcesses ProcessSwitchOverhead
+#
+# Custom process set (as instructed: "create your own input file and generate
+# at least 5 processes"). Chosen deliberately so:
+#   - total utilization sum(C_i/T_i) = 4/20+5/25+6/30+8/40+10/50 = 1.00
+#     exactly at the theoretical EDF feasibility boundary (EDF is feasible
+#     iff utilization <= 1, so this is the hardest case EDF can still pass).
+#   - RM's classic Liu & Layland sufficient-schedulability bound for n=5
+#     tasks is n*(2^(1/n)-1) ~= 0.743 (74.3%), well below our 100% load, so
+#     RM is expected to struggle/fail here -- a genuinely interesting test
+#     rather than a foregone conclusion.
+#   - process 3 has a relative deadline (25) shorter than its period (30),
+#     a "constrained deadline" task. This is exactly the case where
+#     Deadline-Monotonic is theoretically preferable to Rate-Monotonic
+#     (RM only assumes D_i == T_i), so it's a fair, meaningful comparison
+#     point between DM and RM rather than them being mathematically identical.
+5 0
+1 0 20 20 4
+2 0 25 25 5
+3 0 25 30 6
+4 0 35 40 8
+5 0 45 50 10
+
+########## custom_input2_3.txt ##########
+# Format: ProcessNumber ArrivalTime RelativeDeadline Period ServiceTime
+# Header: NumberOfProcesses ProcessSwitchOverhead
+#
+# Second custom process set - engineered specifically to make RM fail where
+# DM succeeds, demonstrating the textbook gap between the two policies.
+#
+# Process 1: period=10 (shorter than P2's), deadline=9, service=5
+# Process 2: period=12 (longer than P1's), deadline=6 (much TIGHTER), service=2
+#
+# RM ranks purely by period -> P1 (period 10) beats P2 (period 12), so RM
+# always runs P1 first. At t=0 both arrive; RM runs P1 for 5 units (0->5,
+# meets its own deadline of 9 fine), THEN P2 for 2 units (5->7) -- but P2's
+# deadline was 6, so P2 is already late. RM's own priority assignment causes
+# the miss.
+#
+# DM ranks by relative deadline -> P2 (deadline 6) beats P1 (deadline 9), so
+# DM runs P2 first (0->2, meets deadline 6 easily) THEN P1 (2->7, meets
+# deadline 9 easily). Same two jobs, same total work, opposite order -> DM
+# meets both deadlines where RM does not.
+#
+# Processes 3-5 are deliberately light background load (total utilization
+# ~77.5%) so the RM/DM divergence above is the actual cause of any RM
+# failure, not generic system overload.
+5 0
+1 0 9 10 5
+2 0 6 12 2
+3 0 18 20 1
+4 0 25 30 1
+5 0 35 40 1
+
+########## sample_given3_results.log ##########
+INPUT FILE: sample_given3.txt
+Processes: 5, switch overhead: 0
+
+==============================================================================
+RM  (simulated horizon = 101 units)
+==============================================================================
+--- Event trace (sorted chronologically) ---
+t=   0 | ARRIVE | P1 job released, deadline=8, service=4
+t=   0 | ARRIVE | P2 job released, deadline=10, service=5
+t=   0 | ARRIVE | P3 job released, deadline=10, service=5
+t=   0 | ARRIVE | P4 job released, deadline=15, service=8
+t=   0 | ARRIVE | P5 job released, deadline=20, service=10
+t=   4 | FINISH | P1 job (released 0) done (on time) (deadline was 8)
+t=   9 | FINISH | P2 job (released 0) done (on time) (deadline was 10)
+t=  10 | MISS   | P3 missed its deadline (remaining=2 at deadline)
+t=  12 | ARRIVE | P1 job released, deadline=20, service=4
+t=  15 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t=  16 | FINISH | P1 job (released 12) done (on time) (deadline was 20)
+t=  18 | FINISH | P3 job (released 0) done -- LATE (deadline was 10)
+t=  20 | ARRIVE | P2 job released, deadline=30, service=5
+t=  20 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t=  24 | ARRIVE | P1 job released, deadline=32, service=4
+t=  25 | ARRIVE | P3 job released, deadline=35, service=5
+t=  28 | FINISH | P1 job (released 24) done (on time) (deadline was 32)
+t=  28 | ARRIVE | P4 job released, deadline=43, service=8
+t=  29 | FINISH | P2 job (released 20) done (on time) (deadline was 30)
+t=  32 | ARRIVE | P5 job released, deadline=52, service=10
+t=  34 | FINISH | P3 job (released 25) done (on time) (deadline was 35)
+t=  36 | ARRIVE | P1 job released, deadline=44, service=4
+t=  40 | FINISH | P1 job (released 36) done (on time) (deadline was 44)
+t=  40 | ARRIVE | P2 job released, deadline=50, service=5
+t=  43 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t=  45 | FINISH | P2 job (released 40) done (on time) (deadline was 50)
+t=  48 | ARRIVE | P1 job released, deadline=56, service=4
+t=  50 | ARRIVE | P3 job released, deadline=60, service=5
+t=  52 | FINISH | P1 job (released 48) done (on time) (deadline was 56)
+t=  52 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t=  56 | ARRIVE | P4 job released, deadline=71, service=8
+t=  57 | FINISH | P3 job (released 50) done (on time) (deadline was 60)
+t=  58 | FINISH | P4 job (released 0) done -- LATE (deadline was 15)
+t=  60 | ARRIVE | P1 job released, deadline=68, service=4
+t=  60 | ARRIVE | P2 job released, deadline=70, service=5
+t=  64 | FINISH | P1 job (released 60) done (on time) (deadline was 68)
+t=  64 | ARRIVE | P5 job released, deadline=84, service=10
+t=  69 | FINISH | P2 job (released 60) done (on time) (deadline was 70)
+t=  71 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t=  72 | ARRIVE | P1 job released, deadline=80, service=4
+t=  75 | ARRIVE | P3 job released, deadline=85, service=5
+t=  76 | FINISH | P1 job (released 72) done (on time) (deadline was 80)
+t=  80 | ARRIVE | P2 job released, deadline=90, service=5
+t=  84 | ARRIVE | P1 job released, deadline=92, service=4
+t=  84 | ARRIVE | P4 job released, deadline=99, service=8
+t=  84 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t=  85 | MISS   | P3 missed its deadline (remaining=1 at deadline)
+t=  88 | FINISH | P1 job (released 84) done (on time) (deadline was 92)
+t=  89 | FINISH | P2 job (released 80) done (on time) (deadline was 90)
+t=  90 | FINISH | P3 job (released 75) done -- LATE (deadline was 85)
+t=  93 | FINISH | P4 job (released 28) done -- LATE (deadline was 43)
+t=  96 | ARRIVE | P1 job released, deadline=104, service=4
+t=  96 | ARRIVE | P5 job released, deadline=116, service=10
+t=  99 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 100 | FINISH | P1 job (released 96) done (on time) (deadline was 104)
+t= 100 | ARRIVE | P2 job released, deadline=110, service=5
+t= 100 | ARRIVE | P3 job released, deadline=110, service=5
+
+--- Summary ---
+RM Results:
+
+Schedule feasible from 0 to 10 units. At 10, process 3 did not meet deadline. CPU time took 101 units (simulated for 101 units, 100.0% utilization, 9 total deadline miss(es).
+
+Process 1: Arrival Time: 0, Service: 4, Relative Deadline: 8, Period: 12, finish: 4, 16, 28, 40, 52, 64, 76, 88, 100.
+Process 2: Arrival Time: 0, Service: 5, Relative Deadline: 10, Period: 20, finish: 9, 29, 45, 69, 89.
+Process 3: Arrival Time: 0, Service: 5, Relative Deadline: 10, Period: 25, finish: 18, 34, 57, 90.  [2 missed]
+Process 4: Arrival Time: 0, Service: 8, Relative Deadline: 15, Period: 28, finish: 58, 93.  [4 missed]
+Process 5: Arrival Time: 0, Service: 10, Relative Deadline: 20, Period: 32, finish: (none completed).  [3 missed]
+
+==============================================================================
+DM  (simulated horizon = 413 units)
+==============================================================================
+--- Event trace (sorted chronologically) ---
+t=   0 | ARRIVE | P1 job released, deadline=8, service=4
+t=   0 | ARRIVE | P2 job released, deadline=10, service=5
+t=   0 | ARRIVE | P3 job released, deadline=10, service=5
+t=   0 | ARRIVE | P4 job released, deadline=15, service=8
+t=   0 | ARRIVE | P5 job released, deadline=20, service=10
+t=   4 | FINISH | P1 job (released 0) done (on time) (deadline was 8)
+t=   9 | FINISH | P2 job (released 0) done (on time) (deadline was 10)
+t=  10 | MISS   | P3 missed its deadline (remaining=2 at deadline)
+t=  12 | ARRIVE | P1 job released, deadline=20, service=4
+t=  15 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t=  16 | FINISH | P1 job (released 12) done (on time) (deadline was 20)
+t=  18 | FINISH | P3 job (released 0) done -- LATE (deadline was 10)
+t=  20 | ARRIVE | P2 job released, deadline=30, service=5
+t=  20 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t=  24 | ARRIVE | P1 job released, deadline=32, service=4
+t=  25 | ARRIVE | P3 job released, deadline=35, service=5
+t=  28 | FINISH | P1 job (released 24) done (on time) (deadline was 32)
+t=  28 | ARRIVE | P4 job released, deadline=43, service=8
+t=  29 | FINISH | P2 job (released 20) done (on time) (deadline was 30)
+t=  32 | ARRIVE | P5 job released, deadline=52, service=10
+t=  34 | FINISH | P3 job (released 25) done (on time) (deadline was 35)
+t=  36 | ARRIVE | P1 job released, deadline=44, service=4
+t=  40 | FINISH | P1 job (released 36) done (on time) (deadline was 44)
+t=  40 | ARRIVE | P2 job released, deadline=50, service=5
+t=  43 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t=  45 | FINISH | P2 job (released 40) done (on time) (deadline was 50)
+t=  48 | ARRIVE | P1 job released, deadline=56, service=4
+t=  50 | ARRIVE | P3 job released, deadline=60, service=5
+t=  52 | FINISH | P1 job (released 48) done (on time) (deadline was 56)
+t=  52 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t=  56 | ARRIVE | P4 job released, deadline=71, service=8
+t=  57 | FINISH | P3 job (released 50) done (on time) (deadline was 60)
+t=  58 | FINISH | P4 job (released 0) done -- LATE (deadline was 15)
+t=  60 | ARRIVE | P1 job released, deadline=68, service=4
+t=  60 | ARRIVE | P2 job released, deadline=70, service=5
+t=  64 | FINISH | P1 job (released 60) done (on time) (deadline was 68)
+t=  64 | ARRIVE | P5 job released, deadline=84, service=10
+t=  69 | FINISH | P2 job (released 60) done (on time) (deadline was 70)
+t=  71 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t=  72 | ARRIVE | P1 job released, deadline=80, service=4
+t=  75 | ARRIVE | P3 job released, deadline=85, service=5
+t=  76 | FINISH | P1 job (released 72) done (on time) (deadline was 80)
+t=  80 | ARRIVE | P2 job released, deadline=90, service=5
+t=  84 | ARRIVE | P1 job released, deadline=92, service=4
+t=  84 | ARRIVE | P4 job released, deadline=99, service=8
+t=  84 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t=  85 | MISS   | P3 missed its deadline (remaining=1 at deadline)
+t=  88 | FINISH | P1 job (released 84) done (on time) (deadline was 92)
+t=  89 | FINISH | P2 job (released 80) done (on time) (deadline was 90)
+t=  90 | FINISH | P3 job (released 75) done -- LATE (deadline was 85)
+t=  93 | FINISH | P4 job (released 28) done -- LATE (deadline was 43)
+t=  96 | ARRIVE | P1 job released, deadline=104, service=4
+t=  96 | ARRIVE | P5 job released, deadline=116, service=10
+t=  99 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 100 | FINISH | P1 job (released 96) done (on time) (deadline was 104)
+t= 100 | ARRIVE | P2 job released, deadline=110, service=5
+t= 100 | ARRIVE | P3 job released, deadline=110, service=5
+t= 105 | FINISH | P2 job (released 100) done (on time) (deadline was 110)
+t= 108 | ARRIVE | P1 job released, deadline=116, service=4
+t= 110 | MISS   | P3 missed its deadline (remaining=2 at deadline)
+t= 112 | FINISH | P1 job (released 108) done (on time) (deadline was 116)
+t= 112 | ARRIVE | P4 job released, deadline=127, service=8
+t= 114 | FINISH | P3 job (released 100) done -- LATE (deadline was 110)
+t= 116 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 119 | FINISH | P4 job (released 56) done -- LATE (deadline was 71)
+t= 120 | ARRIVE | P1 job released, deadline=128, service=4
+t= 120 | ARRIVE | P2 job released, deadline=130, service=5
+t= 124 | FINISH | P1 job (released 120) done (on time) (deadline was 128)
+t= 125 | ARRIVE | P3 job released, deadline=135, service=5
+t= 127 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 128 | ARRIVE | P5 job released, deadline=148, service=10
+t= 129 | FINISH | P2 job (released 120) done (on time) (deadline was 130)
+t= 132 | ARRIVE | P1 job released, deadline=140, service=4
+t= 135 | MISS   | P3 missed its deadline (remaining=2 at deadline)
+t= 136 | FINISH | P1 job (released 132) done (on time) (deadline was 140)
+t= 138 | FINISH | P3 job (released 125) done -- LATE (deadline was 135)
+t= 140 | ARRIVE | P2 job released, deadline=150, service=5
+t= 140 | ARRIVE | P4 job released, deadline=155, service=8
+t= 144 | ARRIVE | P1 job released, deadline=152, service=4
+t= 148 | FINISH | P1 job (released 144) done (on time) (deadline was 152)
+t= 148 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 149 | FINISH | P2 job (released 140) done (on time) (deadline was 150)
+t= 150 | ARRIVE | P3 job released, deadline=160, service=5
+t= 155 | FINISH | P3 job (released 150) done (on time) (deadline was 160)
+t= 155 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 156 | ARRIVE | P1 job released, deadline=164, service=4
+t= 160 | FINISH | P1 job (released 156) done (on time) (deadline was 164)
+t= 160 | ARRIVE | P2 job released, deadline=170, service=5
+t= 160 | ARRIVE | P5 job released, deadline=180, service=10
+t= 165 | FINISH | P2 job (released 160) done (on time) (deadline was 170)
+t= 168 | FINISH | P4 job (released 84) done -- LATE (deadline was 99)
+t= 168 | ARRIVE | P1 job released, deadline=176, service=4
+t= 168 | ARRIVE | P4 job released, deadline=183, service=8
+t= 172 | FINISH | P1 job (released 168) done (on time) (deadline was 176)
+t= 175 | ARRIVE | P3 job released, deadline=185, service=5
+t= 180 | FINISH | P3 job (released 175) done (on time) (deadline was 185)
+t= 180 | ARRIVE | P1 job released, deadline=188, service=4
+t= 180 | ARRIVE | P2 job released, deadline=190, service=5
+t= 180 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 183 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 184 | FINISH | P1 job (released 180) done (on time) (deadline was 188)
+t= 189 | FINISH | P2 job (released 180) done (on time) (deadline was 190)
+t= 192 | ARRIVE | P1 job released, deadline=200, service=4
+t= 192 | ARRIVE | P5 job released, deadline=212, service=10
+t= 196 | FINISH | P1 job (released 192) done (on time) (deadline was 200)
+t= 196 | ARRIVE | P4 job released, deadline=211, service=8
+t= 198 | FINISH | P4 job (released 112) done -- LATE (deadline was 127)
+t= 200 | ARRIVE | P2 job released, deadline=210, service=5
+t= 200 | ARRIVE | P3 job released, deadline=210, service=5
+t= 204 | ARRIVE | P1 job released, deadline=212, service=4
+t= 208 | FINISH | P1 job (released 204) done (on time) (deadline was 212)
+t= 209 | FINISH | P2 job (released 200) done (on time) (deadline was 210)
+t= 211 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 212 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 214 | FINISH | P3 job (released 200) done -- LATE (deadline was 210)
+t= 216 | ARRIVE | P1 job released, deadline=224, service=4
+t= 220 | FINISH | P1 job (released 216) done (on time) (deadline was 224)
+t= 220 | ARRIVE | P2 job released, deadline=230, service=5
+t= 224 | ARRIVE | P4 job released, deadline=239, service=8
+t= 224 | ARRIVE | P5 job released, deadline=244, service=10
+t= 225 | FINISH | P2 job (released 220) done (on time) (deadline was 230)
+t= 225 | ARRIVE | P3 job released, deadline=235, service=5
+t= 228 | ARRIVE | P1 job released, deadline=236, service=4
+t= 232 | FINISH | P1 job (released 228) done (on time) (deadline was 236)
+t= 234 | FINISH | P3 job (released 225) done (on time) (deadline was 235)
+t= 238 | FINISH | P4 job (released 140) done -- LATE (deadline was 155)
+t= 239 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 240 | ARRIVE | P1 job released, deadline=248, service=4
+t= 240 | ARRIVE | P2 job released, deadline=250, service=5
+t= 244 | FINISH | P1 job (released 240) done (on time) (deadline was 248)
+t= 244 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 249 | FINISH | P2 job (released 240) done (on time) (deadline was 250)
+t= 250 | ARRIVE | P3 job released, deadline=260, service=5
+t= 252 | ARRIVE | P1 job released, deadline=260, service=4
+t= 252 | ARRIVE | P4 job released, deadline=267, service=8
+t= 256 | FINISH | P1 job (released 252) done (on time) (deadline was 260)
+t= 256 | ARRIVE | P5 job released, deadline=276, service=10
+t= 259 | FINISH | P3 job (released 250) done (on time) (deadline was 260)
+t= 260 | ARRIVE | P2 job released, deadline=270, service=5
+t= 264 | ARRIVE | P1 job released, deadline=272, service=4
+t= 267 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 268 | FINISH | P1 job (released 264) done (on time) (deadline was 272)
+t= 269 | FINISH | P2 job (released 260) done (on time) (deadline was 270)
+t= 273 | FINISH | P4 job (released 168) done -- LATE (deadline was 183)
+t= 275 | ARRIVE | P3 job released, deadline=285, service=5
+t= 276 | ARRIVE | P1 job released, deadline=284, service=4
+t= 276 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 280 | FINISH | P1 job (released 276) done (on time) (deadline was 284)
+t= 280 | ARRIVE | P2 job released, deadline=290, service=5
+t= 280 | ARRIVE | P4 job released, deadline=295, service=8
+t= 285 | FINISH | P2 job (released 280) done (on time) (deadline was 290)
+t= 285 | MISS   | P3 missed its deadline (remaining=1 at deadline)
+t= 288 | ARRIVE | P1 job released, deadline=296, service=4
+t= 288 | ARRIVE | P5 job released, deadline=308, service=10
+t= 292 | FINISH | P1 job (released 288) done (on time) (deadline was 296)
+t= 293 | FINISH | P3 job (released 275) done -- LATE (deadline was 285)
+t= 295 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 299 | FINISH | P4 job (released 196) done -- LATE (deadline was 211)
+t= 300 | ARRIVE | P1 job released, deadline=308, service=4
+t= 300 | ARRIVE | P2 job released, deadline=310, service=5
+t= 300 | ARRIVE | P3 job released, deadline=310, service=5
+t= 304 | FINISH | P1 job (released 300) done (on time) (deadline was 308)
+t= 308 | ARRIVE | P4 job released, deadline=323, service=8
+t= 308 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 309 | FINISH | P2 job (released 300) done (on time) (deadline was 310)
+t= 310 | MISS   | P3 missed its deadline (remaining=2 at deadline)
+t= 312 | ARRIVE | P1 job released, deadline=320, service=4
+t= 316 | FINISH | P1 job (released 312) done (on time) (deadline was 320)
+t= 318 | FINISH | P3 job (released 300) done -- LATE (deadline was 310)
+t= 320 | ARRIVE | P2 job released, deadline=330, service=5
+t= 320 | ARRIVE | P5 job released, deadline=340, service=10
+t= 323 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 324 | ARRIVE | P1 job released, deadline=332, service=4
+t= 325 | ARRIVE | P3 job released, deadline=335, service=5
+t= 328 | FINISH | P1 job (released 324) done (on time) (deadline was 332)
+t= 329 | FINISH | P2 job (released 320) done (on time) (deadline was 330)
+t= 334 | FINISH | P3 job (released 325) done (on time) (deadline was 335)
+t= 336 | ARRIVE | P1 job released, deadline=344, service=4
+t= 336 | ARRIVE | P4 job released, deadline=351, service=8
+t= 340 | FINISH | P1 job (released 336) done (on time) (deadline was 344)
+t= 340 | ARRIVE | P2 job released, deadline=350, service=5
+t= 340 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 345 | FINISH | P2 job (released 340) done (on time) (deadline was 350)
+t= 348 | FINISH | P4 job (released 224) done -- LATE (deadline was 239)
+t= 348 | ARRIVE | P1 job released, deadline=356, service=4
+t= 350 | ARRIVE | P3 job released, deadline=360, service=5
+t= 351 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 352 | FINISH | P1 job (released 348) done (on time) (deadline was 356)
+t= 352 | ARRIVE | P5 job released, deadline=372, service=10
+t= 357 | FINISH | P3 job (released 350) done (on time) (deadline was 360)
+t= 360 | ARRIVE | P1 job released, deadline=368, service=4
+t= 360 | ARRIVE | P2 job released, deadline=370, service=5
+t= 364 | FINISH | P1 job (released 360) done (on time) (deadline was 368)
+t= 364 | ARRIVE | P4 job released, deadline=379, service=8
+t= 369 | FINISH | P2 job (released 360) done (on time) (deadline was 370)
+t= 372 | ARRIVE | P1 job released, deadline=380, service=4
+t= 372 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 375 | ARRIVE | P3 job released, deadline=385, service=5
+t= 376 | FINISH | P1 job (released 372) done (on time) (deadline was 380)
+t= 379 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 380 | ARRIVE | P2 job released, deadline=390, service=5
+t= 384 | ARRIVE | P1 job released, deadline=392, service=4
+t= 384 | ARRIVE | P5 job released, deadline=404, service=10
+t= 385 | MISS   | P3 missed its deadline (remaining=1 at deadline)
+t= 388 | FINISH | P1 job (released 384) done (on time) (deadline was 392)
+t= 389 | FINISH | P2 job (released 380) done (on time) (deadline was 390)
+t= 390 | FINISH | P3 job (released 375) done -- LATE (deadline was 385)
+t= 392 | FINISH | P4 job (released 252) done -- LATE (deadline was 267)
+t= 392 | ARRIVE | P4 job released, deadline=407, service=8
+t= 396 | ARRIVE | P1 job released, deadline=404, service=4
+t= 400 | FINISH | P1 job (released 396) done (on time) (deadline was 404)
+t= 400 | ARRIVE | P2 job released, deadline=410, service=5
+t= 400 | ARRIVE | P3 job released, deadline=410, service=5
+t= 404 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 405 | FINISH | P2 job (released 400) done (on time) (deadline was 410)
+t= 407 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 408 | ARRIVE | P1 job released, deadline=416, service=4
+t= 410 | MISS   | P3 missed its deadline (remaining=2 at deadline)
+t= 412 | FINISH | P1 job (released 408) done (on time) (deadline was 416)
+
+--- Summary ---
+DM Results:
+
+Schedule feasible from 0 to 10 units. At 10, process 3 did not meet deadline. CPU time took 413 units (simulated for 413 units, 100.0% utilization, 37 total deadline miss(es).
+
+Process 1: Arrival Time: 0, Service: 4, Relative Deadline: 8, Period: 12, finish: 4, 16, 28, 40, 52, 64, 76, 88, 100, 112, 124, 136, 148, 160, 172, 184, 196, 208, 220, 232, 244, 256, 268, 280, 292, 304, 316, 328, 340, 352, 364, 376, 388, 400, 412.
+Process 2: Arrival Time: 0, Service: 5, Relative Deadline: 10, Period: 20, finish: 9, 29, 45, 69, 89, 105, 129, 149, 165, 189, 209, 225, 249, 269, 285, 309, 329, 345, 369, 389, 405.
+Process 3: Arrival Time: 0, Service: 5, Relative Deadline: 10, Period: 25, finish: 18, 34, 57, 90, 114, 138, 155, 180, 214, 234, 259, 293, 318, 334, 357, 390.  [9 missed]
+Process 4: Arrival Time: 0, Service: 8, Relative Deadline: 15, Period: 28, finish: 58, 93, 119, 168, 198, 238, 273, 299, 348, 392.  [15 missed]
+Process 5: Arrival Time: 0, Service: 10, Relative Deadline: 20, Period: 32, finish: (none completed).  [13 missed]
+
+==============================================================================
+EDF  (simulated horizon = 500 units)
+==============================================================================
+--- Event trace (sorted chronologically) ---
+t=   0 | ARRIVE | P1 job released, deadline=8, service=4
+t=   0 | ARRIVE | P2 job released, deadline=10, service=5
+t=   0 | ARRIVE | P3 job released, deadline=10, service=5
+t=   0 | ARRIVE | P4 job released, deadline=15, service=8
+t=   0 | ARRIVE | P5 job released, deadline=20, service=10
+t=   4 | FINISH | P1 job (released 0) done (on time) (deadline was 8)
+t=   9 | FINISH | P2 job (released 0) done (on time) (deadline was 10)
+t=  10 | MISS   | P3 missed its deadline (remaining=2 at deadline)
+t=  12 | ARRIVE | P1 job released, deadline=20, service=4
+t=  14 | FINISH | P3 job (released 0) done -- LATE (deadline was 10)
+t=  15 | MISS   | P4 missed its deadline (remaining=2 at deadline)
+t=  20 | ARRIVE | P2 job released, deadline=30, service=5
+t=  20 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t=  20 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t=  22 | FINISH | P4 job (released 0) done -- LATE (deadline was 15)
+t=  24 | ARRIVE | P1 job released, deadline=32, service=4
+t=  25 | ARRIVE | P3 job released, deadline=35, service=5
+t=  26 | FINISH | P1 job (released 12) done -- LATE (deadline was 20)
+t=  28 | ARRIVE | P4 job released, deadline=43, service=8
+t=  30 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t=  32 | ARRIVE | P5 job released, deadline=52, service=10
+t=  32 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t=  35 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t=  36 | FINISH | P5 job (released 0) done -- LATE (deadline was 20)
+t=  36 | ARRIVE | P1 job released, deadline=44, service=4
+t=  40 | ARRIVE | P2 job released, deadline=50, service=5
+t=  41 | FINISH | P2 job (released 20) done -- LATE (deadline was 30)
+t=  43 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t=  44 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t=  45 | FINISH | P1 job (released 24) done -- LATE (deadline was 32)
+t=  48 | ARRIVE | P1 job released, deadline=56, service=4
+t=  50 | FINISH | P3 job (released 25) done -- LATE (deadline was 35)
+t=  50 | ARRIVE | P3 job released, deadline=60, service=5
+t=  50 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t=  52 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t=  56 | ARRIVE | P4 job released, deadline=71, service=8
+t=  56 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t=  58 | FINISH | P4 job (released 28) done -- LATE (deadline was 43)
+t=  60 | ARRIVE | P1 job released, deadline=68, service=4
+t=  60 | ARRIVE | P2 job released, deadline=70, service=5
+t=  60 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t=  62 | FINISH | P1 job (released 36) done -- LATE (deadline was 44)
+t=  64 | ARRIVE | P5 job released, deadline=84, service=10
+t=  67 | FINISH | P2 job (released 40) done -- LATE (deadline was 50)
+t=  68 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t=  70 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t=  71 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t=  72 | ARRIVE | P1 job released, deadline=80, service=4
+t=  75 | ARRIVE | P3 job released, deadline=85, service=5
+t=  77 | FINISH | P5 job (released 32) done -- LATE (deadline was 52)
+t=  80 | ARRIVE | P2 job released, deadline=90, service=5
+t=  80 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t=  81 | FINISH | P1 job (released 48) done -- LATE (deadline was 56)
+t=  84 | ARRIVE | P1 job released, deadline=92, service=4
+t=  84 | ARRIVE | P4 job released, deadline=99, service=8
+t=  84 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t=  85 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t=  86 | FINISH | P3 job (released 50) done -- LATE (deadline was 60)
+t=  90 | FINISH | P1 job (released 60) done -- LATE (deadline was 68)
+t=  90 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t=  92 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t=  95 | FINISH | P2 job (released 60) done -- LATE (deadline was 70)
+t=  96 | ARRIVE | P1 job released, deadline=104, service=4
+t=  96 | ARRIVE | P5 job released, deadline=116, service=10
+t=  99 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 100 | ARRIVE | P2 job released, deadline=110, service=5
+t= 100 | ARRIVE | P3 job released, deadline=110, service=5
+t= 103 | FINISH | P4 job (released 56) done -- LATE (deadline was 71)
+t= 104 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 107 | FINISH | P1 job (released 72) done -- LATE (deadline was 80)
+t= 108 | ARRIVE | P1 job released, deadline=116, service=4
+t= 110 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 110 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t= 112 | ARRIVE | P4 job released, deadline=127, service=8
+t= 116 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 116 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 117 | FINISH | P5 job (released 64) done -- LATE (deadline was 84)
+t= 120 | ARRIVE | P1 job released, deadline=128, service=4
+t= 120 | ARRIVE | P2 job released, deadline=130, service=5
+t= 122 | FINISH | P3 job (released 75) done -- LATE (deadline was 85)
+t= 125 | ARRIVE | P3 job released, deadline=135, service=5
+t= 127 | FINISH | P2 job (released 80) done -- LATE (deadline was 90)
+t= 127 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 128 | ARRIVE | P5 job released, deadline=148, service=10
+t= 128 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 130 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 131 | FINISH | P1 job (released 84) done -- LATE (deadline was 92)
+t= 132 | ARRIVE | P1 job released, deadline=140, service=4
+t= 135 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t= 139 | FINISH | P4 job (released 84) done -- LATE (deadline was 99)
+t= 140 | ARRIVE | P2 job released, deadline=150, service=5
+t= 140 | ARRIVE | P4 job released, deadline=155, service=8
+t= 140 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 143 | FINISH | P1 job (released 96) done -- LATE (deadline was 104)
+t= 144 | ARRIVE | P1 job released, deadline=152, service=4
+t= 148 | FINISH | P2 job (released 100) done -- LATE (deadline was 110)
+t= 148 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 150 | ARRIVE | P3 job released, deadline=160, service=5
+t= 150 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 152 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 153 | FINISH | P3 job (released 100) done -- LATE (deadline was 110)
+t= 155 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 156 | ARRIVE | P1 job released, deadline=164, service=4
+t= 157 | FINISH | P1 job (released 108) done -- LATE (deadline was 116)
+t= 160 | ARRIVE | P2 job released, deadline=170, service=5
+t= 160 | ARRIVE | P5 job released, deadline=180, service=10
+t= 160 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t= 164 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 167 | FINISH | P5 job (released 96) done -- LATE (deadline was 116)
+t= 168 | ARRIVE | P1 job released, deadline=176, service=4
+t= 168 | ARRIVE | P4 job released, deadline=183, service=8
+t= 170 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 175 | FINISH | P4 job (released 112) done -- LATE (deadline was 127)
+t= 175 | ARRIVE | P3 job released, deadline=185, service=5
+t= 176 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 179 | FINISH | P1 job (released 120) done -- LATE (deadline was 128)
+t= 180 | ARRIVE | P1 job released, deadline=188, service=4
+t= 180 | ARRIVE | P2 job released, deadline=190, service=5
+t= 180 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 183 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 184 | FINISH | P2 job (released 120) done -- LATE (deadline was 130)
+t= 185 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t= 188 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 189 | FINISH | P3 job (released 125) done -- LATE (deadline was 135)
+t= 190 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 192 | ARRIVE | P1 job released, deadline=200, service=4
+t= 192 | ARRIVE | P5 job released, deadline=212, service=10
+t= 193 | FINISH | P1 job (released 132) done -- LATE (deadline was 140)
+t= 196 | ARRIVE | P4 job released, deadline=211, service=8
+t= 200 | ARRIVE | P2 job released, deadline=210, service=5
+t= 200 | ARRIVE | P3 job released, deadline=210, service=5
+t= 200 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 203 | FINISH | P5 job (released 128) done -- LATE (deadline was 148)
+t= 204 | ARRIVE | P1 job released, deadline=212, service=4
+t= 208 | FINISH | P2 job (released 140) done -- LATE (deadline was 150)
+t= 210 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 210 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t= 211 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 212 | FINISH | P1 job (released 144) done -- LATE (deadline was 152)
+t= 212 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 212 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 216 | ARRIVE | P1 job released, deadline=224, service=4
+t= 220 | FINISH | P4 job (released 140) done -- LATE (deadline was 155)
+t= 220 | ARRIVE | P2 job released, deadline=230, service=5
+t= 224 | ARRIVE | P4 job released, deadline=239, service=8
+t= 224 | ARRIVE | P5 job released, deadline=244, service=10
+t= 224 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 225 | FINISH | P3 job (released 150) done -- LATE (deadline was 160)
+t= 225 | ARRIVE | P3 job released, deadline=235, service=5
+t= 228 | ARRIVE | P1 job released, deadline=236, service=4
+t= 229 | FINISH | P1 job (released 156) done -- LATE (deadline was 164)
+t= 230 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 234 | FINISH | P2 job (released 160) done -- LATE (deadline was 170)
+t= 235 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t= 236 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 238 | FINISH | P1 job (released 168) done -- LATE (deadline was 176)
+t= 239 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 240 | ARRIVE | P1 job released, deadline=248, service=4
+t= 240 | ARRIVE | P2 job released, deadline=250, service=5
+t= 244 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 248 | FINISH | P5 job (released 160) done -- LATE (deadline was 180)
+t= 248 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 250 | ARRIVE | P3 job released, deadline=260, service=5
+t= 250 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 252 | ARRIVE | P1 job released, deadline=260, service=4
+t= 252 | ARRIVE | P4 job released, deadline=267, service=8
+t= 256 | FINISH | P4 job (released 168) done -- LATE (deadline was 183)
+t= 256 | ARRIVE | P5 job released, deadline=276, service=10
+t= 260 | ARRIVE | P2 job released, deadline=270, service=5
+t= 260 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t= 260 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 261 | FINISH | P3 job (released 175) done -- LATE (deadline was 185)
+t= 264 | ARRIVE | P1 job released, deadline=272, service=4
+t= 265 | FINISH | P1 job (released 180) done -- LATE (deadline was 188)
+t= 267 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 270 | FINISH | P2 job (released 180) done -- LATE (deadline was 190)
+t= 270 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 272 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 274 | FINISH | P1 job (released 192) done -- LATE (deadline was 200)
+t= 275 | ARRIVE | P3 job released, deadline=285, service=5
+t= 276 | ARRIVE | P1 job released, deadline=284, service=4
+t= 276 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 279 | FINISH | P2 job (released 200) done -- LATE (deadline was 210)
+t= 280 | ARRIVE | P2 job released, deadline=290, service=5
+t= 280 | ARRIVE | P4 job released, deadline=295, service=8
+t= 284 | FINISH | P3 job (released 200) done -- LATE (deadline was 210)
+t= 284 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 285 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t= 288 | ARRIVE | P1 job released, deadline=296, service=4
+t= 288 | ARRIVE | P5 job released, deadline=308, service=10
+t= 290 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 292 | FINISH | P4 job (released 196) done -- LATE (deadline was 211)
+t= 295 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 296 | FINISH | P1 job (released 204) done -- LATE (deadline was 212)
+t= 296 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 300 | ARRIVE | P1 job released, deadline=308, service=4
+t= 300 | ARRIVE | P2 job released, deadline=310, service=5
+t= 300 | ARRIVE | P3 job released, deadline=310, service=5
+t= 306 | FINISH | P5 job (released 192) done -- LATE (deadline was 212)
+t= 308 | ARRIVE | P4 job released, deadline=323, service=8
+t= 308 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 308 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 310 | FINISH | P1 job (released 216) done -- LATE (deadline was 224)
+t= 310 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 310 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t= 312 | ARRIVE | P1 job released, deadline=320, service=4
+t= 315 | FINISH | P2 job (released 220) done -- LATE (deadline was 230)
+t= 320 | FINISH | P3 job (released 225) done -- LATE (deadline was 235)
+t= 320 | ARRIVE | P2 job released, deadline=330, service=5
+t= 320 | ARRIVE | P5 job released, deadline=340, service=10
+t= 320 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 323 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 324 | FINISH | P1 job (released 228) done -- LATE (deadline was 236)
+t= 324 | ARRIVE | P1 job released, deadline=332, service=4
+t= 325 | ARRIVE | P3 job released, deadline=335, service=5
+t= 330 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 332 | FINISH | P4 job (released 224) done -- LATE (deadline was 239)
+t= 332 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 335 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t= 336 | ARRIVE | P1 job released, deadline=344, service=4
+t= 336 | ARRIVE | P4 job released, deadline=351, service=8
+t= 340 | ARRIVE | P2 job released, deadline=350, service=5
+t= 340 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 342 | FINISH | P5 job (released 224) done -- LATE (deadline was 244)
+t= 344 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 346 | FINISH | P1 job (released 240) done -- LATE (deadline was 248)
+t= 348 | ARRIVE | P1 job released, deadline=356, service=4
+t= 350 | ARRIVE | P3 job released, deadline=360, service=5
+t= 350 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 351 | FINISH | P2 job (released 240) done -- LATE (deadline was 250)
+t= 351 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 352 | ARRIVE | P5 job released, deadline=372, service=10
+t= 355 | FINISH | P1 job (released 252) done -- LATE (deadline was 260)
+t= 356 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 360 | FINISH | P3 job (released 250) done -- LATE (deadline was 260)
+t= 360 | ARRIVE | P1 job released, deadline=368, service=4
+t= 360 | ARRIVE | P2 job released, deadline=370, service=5
+t= 360 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t= 364 | ARRIVE | P4 job released, deadline=379, service=8
+t= 368 | FINISH | P4 job (released 252) done -- LATE (deadline was 267)
+t= 368 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 370 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 372 | ARRIVE | P1 job released, deadline=380, service=4
+t= 372 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 373 | FINISH | P2 job (released 260) done -- LATE (deadline was 270)
+t= 375 | ARRIVE | P3 job released, deadline=385, service=5
+t= 377 | FINISH | P1 job (released 264) done -- LATE (deadline was 272)
+t= 379 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 380 | ARRIVE | P2 job released, deadline=390, service=5
+t= 380 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 384 | ARRIVE | P1 job released, deadline=392, service=4
+t= 384 | ARRIVE | P5 job released, deadline=404, service=10
+t= 385 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t= 387 | FINISH | P5 job (released 256) done -- LATE (deadline was 276)
+t= 390 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 391 | FINISH | P1 job (released 276) done -- LATE (deadline was 284)
+t= 392 | ARRIVE | P4 job released, deadline=407, service=8
+t= 392 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 396 | FINISH | P3 job (released 275) done -- LATE (deadline was 285)
+t= 396 | ARRIVE | P1 job released, deadline=404, service=4
+t= 400 | ARRIVE | P2 job released, deadline=410, service=5
+t= 400 | ARRIVE | P3 job released, deadline=410, service=5
+t= 401 | FINISH | P2 job (released 280) done -- LATE (deadline was 290)
+t= 404 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 404 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 407 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 408 | ARRIVE | P1 job released, deadline=416, service=4
+t= 409 | FINISH | P4 job (released 280) done -- LATE (deadline was 295)
+t= 410 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 410 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t= 413 | FINISH | P1 job (released 288) done -- LATE (deadline was 296)
+t= 416 | ARRIVE | P5 job released, deadline=436, service=10
+t= 416 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 417 | FINISH | P1 job (released 300) done -- LATE (deadline was 308)
+t= 420 | ARRIVE | P1 job released, deadline=428, service=4
+t= 420 | ARRIVE | P2 job released, deadline=430, service=5
+t= 420 | ARRIVE | P4 job released, deadline=435, service=8
+t= 425 | ARRIVE | P3 job released, deadline=435, service=5
+t= 427 | FINISH | P5 job (released 288) done -- LATE (deadline was 308)
+t= 428 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 430 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 432 | FINISH | P2 job (released 300) done -- LATE (deadline was 310)
+t= 432 | ARRIVE | P1 job released, deadline=440, service=4
+t= 435 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 435 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t= 436 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 437 | FINISH | P3 job (released 300) done -- LATE (deadline was 310)
+t= 440 | ARRIVE | P2 job released, deadline=450, service=5
+t= 440 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 441 | FINISH | P1 job (released 312) done -- LATE (deadline was 320)
+t= 444 | ARRIVE | P1 job released, deadline=452, service=4
+t= 448 | ARRIVE | P4 job released, deadline=463, service=8
+t= 448 | ARRIVE | P5 job released, deadline=468, service=10
+t= 449 | FINISH | P4 job (released 308) done -- LATE (deadline was 323)
+t= 450 | ARRIVE | P3 job released, deadline=460, service=5
+t= 450 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 452 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 454 | FINISH | P2 job (released 320) done -- LATE (deadline was 330)
+t= 456 | ARRIVE | P1 job released, deadline=464, service=4
+t= 458 | FINISH | P1 job (released 324) done -- LATE (deadline was 332)
+t= 460 | ARRIVE | P2 job released, deadline=470, service=5
+t= 460 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t= 463 | FINISH | P3 job (released 325) done -- LATE (deadline was 335)
+t= 463 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 464 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 468 | ARRIVE | P1 job released, deadline=476, service=4
+t= 468 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t= 470 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 473 | FINISH | P5 job (released 320) done -- LATE (deadline was 340)
+t= 475 | ARRIVE | P3 job released, deadline=485, service=5
+t= 476 | ARRIVE | P4 job released, deadline=491, service=8
+t= 476 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 477 | FINISH | P1 job (released 336) done -- LATE (deadline was 344)
+t= 480 | ARRIVE | P1 job released, deadline=488, service=4
+t= 480 | ARRIVE | P2 job released, deadline=490, service=5
+t= 480 | ARRIVE | P5 job released, deadline=500, service=10
+t= 482 | FINISH | P2 job (released 340) done -- LATE (deadline was 350)
+t= 485 | MISS   | P3 missed its deadline (remaining=5 at deadline)
+t= 488 | MISS   | P1 missed its deadline (remaining=4 at deadline)
+t= 490 | FINISH | P4 job (released 336) done -- LATE (deadline was 351)
+t= 490 | MISS   | P2 missed its deadline (remaining=5 at deadline)
+t= 491 | MISS   | P4 missed its deadline (remaining=8 at deadline)
+t= 492 | ARRIVE | P1 job released, deadline=500, service=4
+t= 494 | FINISH | P1 job (released 348) done -- LATE (deadline was 356)
+t= 499 | FINISH | P3 job (released 350) done -- LATE (deadline was 360)
+
+--- Summary ---
+EDF Results:
+
+Schedule feasible from 0 to 10 units. At 10, process 3 did not meet deadline. CPU time took 500 units (simulated for 500 units, 100.0% utilization, 117 total deadline miss(es).
+
+Process 1: Arrival Time: 0, Service: 4, Relative Deadline: 8, Period: 12, finish: 4, 26, 45, 62, 81, 90, 107, 131, 143, 157, 179, 193, 212, 229, 238, 265, 274, 296, 310, 324, 346, 355, 377, 391, 413, 417, 441, 458, 477, 494.  [40 missed]
+Process 2: Arrival Time: 0, Service: 5, Relative Deadline: 10, Period: 20, finish: 9, 41, 67, 95, 127, 148, 184, 208, 234, 270, 279, 315, 351, 373, 401, 432, 454, 482.  [24 missed]
+Process 3: Arrival Time: 0, Service: 5, Relative Deadline: 10, Period: 25, finish: 14, 50, 86, 122, 153, 189, 225, 261, 284, 320, 360, 396, 437, 463, 499.  [20 missed]
+Process 4: Arrival Time: 0, Service: 8, Relative Deadline: 15, Period: 28, finish: 22, 58, 103, 139, 175, 220, 256, 292, 332, 368, 409, 449, 490.  [18 missed]
+Process 5: Arrival Time: 0, Service: 10, Relative Deadline: 20, Period: 32, finish: 36, 77, 117, 167, 203, 248, 306, 342, 387, 427, 473.  [15 missed]
+
+
+########## custom_input3_results.log ##########
+INPUT FILE: custom_input3.txt
+Processes: 5, switch overhead: 0
+
+==============================================================================
+RM  (simulated horizon = 101 units)
+==============================================================================
+--- Event trace (sorted chronologically) ---
+t=   0 | ARRIVE | P1 job released, deadline=20, service=4
+t=   0 | ARRIVE | P2 job released, deadline=25, service=5
+t=   0 | ARRIVE | P3 job released, deadline=25, service=6
+t=   0 | ARRIVE | P4 job released, deadline=35, service=8
+t=   0 | ARRIVE | P5 job released, deadline=45, service=10
+t=   4 | FINISH | P1 job (released 0) done (on time) (deadline was 20)
+t=   9 | FINISH | P2 job (released 0) done (on time) (deadline was 25)
+t=  15 | FINISH | P3 job (released 0) done (on time) (deadline was 25)
+t=  20 | ARRIVE | P1 job released, deadline=40, service=4
+t=  24 | FINISH | P1 job (released 20) done (on time) (deadline was 40)
+t=  25 | ARRIVE | P2 job released, deadline=50, service=5
+t=  30 | FINISH | P2 job (released 25) done (on time) (deadline was 50)
+t=  30 | ARRIVE | P3 job released, deadline=55, service=6
+t=  35 | MISS   | P4 missed its deadline (remaining=2 at deadline)
+t=  36 | FINISH | P3 job (released 30) done (on time) (deadline was 55)
+t=  38 | FINISH | P4 job (released 0) done -- LATE (deadline was 35)
+t=  40 | ARRIVE | P1 job released, deadline=60, service=4
+t=  40 | ARRIVE | P4 job released, deadline=75, service=8
+t=  44 | FINISH | P1 job (released 40) done (on time) (deadline was 60)
+t=  45 | MISS   | P5 missed its deadline (remaining=8 at deadline)
+t=  50 | ARRIVE | P2 job released, deadline=75, service=5
+t=  50 | ARRIVE | P5 job released, deadline=95, service=10
+t=  55 | FINISH | P2 job (released 50) done (on time) (deadline was 75)
+t=  57 | FINISH | P4 job (released 40) done (on time) (deadline was 75)
+t=  60 | ARRIVE | P1 job released, deadline=80, service=4
+t=  60 | ARRIVE | P3 job released, deadline=85, service=6
+t=  64 | FINISH | P1 job (released 60) done (on time) (deadline was 80)
+t=  70 | FINISH | P3 job (released 60) done (on time) (deadline was 85)
+t=  75 | FINISH | P5 job (released 0) done -- LATE (deadline was 45)
+t=  75 | ARRIVE | P2 job released, deadline=100, service=5
+t=  80 | FINISH | P2 job (released 75) done (on time) (deadline was 100)
+t=  80 | ARRIVE | P1 job released, deadline=100, service=4
+t=  80 | ARRIVE | P4 job released, deadline=115, service=8
+t=  84 | FINISH | P1 job (released 80) done (on time) (deadline was 100)
+t=  90 | ARRIVE | P3 job released, deadline=115, service=6
+t=  95 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t=  96 | FINISH | P3 job (released 90) done (on time) (deadline was 115)
+t=  98 | FINISH | P4 job (released 80) done (on time) (deadline was 115)
+t= 100 | ARRIVE | P1 job released, deadline=120, service=4
+t= 100 | ARRIVE | P2 job released, deadline=125, service=5
+t= 100 | ARRIVE | P5 job released, deadline=145, service=10
+
+--- Summary ---
+RM Results:
+
+Schedule feasible from 0 to 35 units. At 35, process 4 did not meet deadline. CPU time took 101 units (simulated for 101 units, 100.0% utilization, 3 total deadline miss(es).
+
+Process 1: Arrival Time: 0, Service: 4, Relative Deadline: 20, Period: 20, finish: 4, 24, 44, 64, 84.
+Process 2: Arrival Time: 0, Service: 5, Relative Deadline: 25, Period: 25, finish: 9, 30, 55, 80.
+Process 3: Arrival Time: 0, Service: 6, Relative Deadline: 25, Period: 30, finish: 15, 36, 70, 96.
+Process 4: Arrival Time: 0, Service: 8, Relative Deadline: 35, Period: 40, finish: 38, 57, 98.  [1 missed]
+Process 5: Arrival Time: 0, Service: 10, Relative Deadline: 45, Period: 50, finish: 75.  [2 missed]
+
+==============================================================================
+DM  (simulated horizon = 413 units)
+==============================================================================
+--- Event trace (sorted chronologically) ---
+t=   0 | ARRIVE | P1 job released, deadline=20, service=4
+t=   0 | ARRIVE | P2 job released, deadline=25, service=5
+t=   0 | ARRIVE | P3 job released, deadline=25, service=6
+t=   0 | ARRIVE | P4 job released, deadline=35, service=8
+t=   0 | ARRIVE | P5 job released, deadline=45, service=10
+t=   4 | FINISH | P1 job (released 0) done (on time) (deadline was 20)
+t=   9 | FINISH | P2 job (released 0) done (on time) (deadline was 25)
+t=  15 | FINISH | P3 job (released 0) done (on time) (deadline was 25)
+t=  20 | ARRIVE | P1 job released, deadline=40, service=4
+t=  24 | FINISH | P1 job (released 20) done (on time) (deadline was 40)
+t=  25 | ARRIVE | P2 job released, deadline=50, service=5
+t=  30 | FINISH | P2 job (released 25) done (on time) (deadline was 50)
+t=  30 | ARRIVE | P3 job released, deadline=55, service=6
+t=  35 | MISS   | P4 missed its deadline (remaining=2 at deadline)
+t=  36 | FINISH | P3 job (released 30) done (on time) (deadline was 55)
+t=  38 | FINISH | P4 job (released 0) done -- LATE (deadline was 35)
+t=  40 | ARRIVE | P1 job released, deadline=60, service=4
+t=  40 | ARRIVE | P4 job released, deadline=75, service=8
+t=  44 | FINISH | P1 job (released 40) done (on time) (deadline was 60)
+t=  45 | MISS   | P5 missed its deadline (remaining=8 at deadline)
+t=  50 | ARRIVE | P2 job released, deadline=75, service=5
+t=  50 | ARRIVE | P5 job released, deadline=95, service=10
+t=  55 | FINISH | P2 job (released 50) done (on time) (deadline was 75)
+t=  57 | FINISH | P4 job (released 40) done (on time) (deadline was 75)
+t=  60 | ARRIVE | P1 job released, deadline=80, service=4
+t=  60 | ARRIVE | P3 job released, deadline=85, service=6
+t=  64 | FINISH | P1 job (released 60) done (on time) (deadline was 80)
+t=  70 | FINISH | P3 job (released 60) done (on time) (deadline was 85)
+t=  75 | FINISH | P5 job (released 0) done -- LATE (deadline was 45)
+t=  75 | ARRIVE | P2 job released, deadline=100, service=5
+t=  80 | FINISH | P2 job (released 75) done (on time) (deadline was 100)
+t=  80 | ARRIVE | P1 job released, deadline=100, service=4
+t=  80 | ARRIVE | P4 job released, deadline=115, service=8
+t=  84 | FINISH | P1 job (released 80) done (on time) (deadline was 100)
+t=  90 | ARRIVE | P3 job released, deadline=115, service=6
+t=  95 | MISS   | P5 missed its deadline (remaining=10 at deadline)
+t=  96 | FINISH | P3 job (released 90) done (on time) (deadline was 115)
+t=  98 | FINISH | P4 job (released 80) done (on time) (deadline was 115)
+t= 100 | ARRIVE | P1 job released, deadline=120, service=4
+t= 100 | ARRIVE | P2 job released, deadline=125, service=5
+t= 100 | ARRIVE | P5 job released, deadline=145, service=10
+t= 104 | FINISH | P1 job (released 100) done (on time) (deadline was 120)
+t= 109 | FINISH | P2 job (released 100) done (on time) (deadline was 125)
+t= 117 | FINISH | P5 job (released 50) done -- LATE (deadline was 95)
+t= 120 | ARRIVE | P1 job released, deadline=140, service=4
+t= 120 | ARRIVE | P3 job released, deadline=145, service=6
+t= 120 | ARRIVE | P4 job released, deadline=155, service=8
+t= 124 | FINISH | P1 job (released 120) done (on time) (deadline was 140)
+t= 125 | ARRIVE | P2 job released, deadline=150, service=5
+t= 130 | FINISH | P2 job (released 125) done (on time) (deadline was 150)
+t= 135 | FINISH | P3 job (released 120) done (on time) (deadline was 145)
+t= 140 | ARRIVE | P1 job released, deadline=160, service=4
+t= 144 | FINISH | P1 job (released 140) done (on time) (deadline was 160)
+t= 145 | MISS   | P5 missed its deadline (remaining=7 at deadline)
+t= 147 | FINISH | P4 job (released 120) done (on time) (deadline was 155)
+t= 150 | ARRIVE | P2 job released, deadline=175, service=5
+t= 150 | ARRIVE | P3 job released, deadline=175, service=6
+t= 150 | ARRIVE | P5 job released, deadline=195, service=10
+t= 155 | FINISH | P2 job (released 150) done (on time) (deadline was 175)
+t= 160 | ARRIVE | P1 job released, deadline=180, service=4
+t= 160 | ARRIVE | P4 job released, deadline=195, service=8
+t= 164 | FINISH | P1 job (released 160) done (on time) (deadline was 180)
+t= 165 | FINISH | P3 job (released 150) done (on time) (deadline was 175)
+t= 173 | FINISH | P4 job (released 160) done (on time) (deadline was 195)
+t= 175 | ARRIVE | P2 job released, deadline=200, service=5
+t= 180 | FINISH | P2 job (released 175) done (on time) (deadline was 200)
+t= 180 | ARRIVE | P1 job released, deadline=200, service=4
+t= 180 | ARRIVE | P3 job released, deadline=205, service=6
+t= 184 | FINISH | P1 job (released 180) done (on time) (deadline was 200)
+t= 190 | FINISH | P3 job (released 180) done (on time) (deadline was 205)
+t= 192 | FINISH | P5 job (released 100) done -- LATE (deadline was 145)
+t= 195 | MISS   | P5 missed its deadline (remaining=2 at deadline)
+t= 200 | ARRIVE | P1 job released, deadline=220, service=4
+t= 200 | ARRIVE | P2 job released, deadline=225, service=5
+t= 200 | ARRIVE | P4 job released, deadline=235, service=8
+t= 200 | ARRIVE | P5 job released, deadline=245, service=10
+t= 204 | FINISH | P1 job (released 200) done (on time) (deadline was 220)
+t= 209 | FINISH | P2 job (released 200) done (on time) (deadline was 225)
+t= 210 | ARRIVE | P3 job released, deadline=235, service=6
+t= 216 | FINISH | P3 job (released 210) done (on time) (deadline was 235)
+t= 220 | ARRIVE | P1 job released, deadline=240, service=4
+t= 224 | FINISH | P1 job (released 220) done (on time) (deadline was 240)
+t= 225 | ARRIVE | P2 job released, deadline=250, service=5
+t= 230 | FINISH | P2 job (released 225) done (on time) (deadline was 250)
+t= 232 | FINISH | P4 job (released 200) done (on time) (deadline was 235)
+t= 234 | FINISH | P5 job (released 150) done -- LATE (deadline was 195)
+t= 240 | ARRIVE | P1 job released, deadline=260, service=4
+t= 240 | ARRIVE | P3 job released, deadline=265, service=6
+t= 240 | ARRIVE | P4 job released, deadline=275, service=8
+t= 244 | FINISH | P1 job (released 240) done (on time) (deadline was 260)
+t= 245 | MISS   | P5 missed its deadline (remaining=4 at deadline)
+t= 250 | FINISH | P3 job (released 240) done (on time) (deadline was 265)
+t= 250 | ARRIVE | P2 job released, deadline=275, service=5
+t= 250 | ARRIVE | P5 job released, deadline=295, service=10
+t= 255 | FINISH | P2 job (released 250) done (on time) (deadline was 275)
+t= 260 | ARRIVE | P1 job released, deadline=280, service=4
+t= 264 | FINISH | P1 job (released 260) done (on time) (deadline was 280)
+t= 267 | FINISH | P4 job (released 240) done (on time) (deadline was 275)
+t= 270 | ARRIVE | P3 job released, deadline=295, service=6
+t= 275 | ARRIVE | P2 job released, deadline=300, service=5
+t= 280 | FINISH | P2 job (released 275) done (on time) (deadline was 300)
+t= 280 | ARRIVE | P1 job released, deadline=300, service=4
+t= 280 | ARRIVE | P4 job released, deadline=315, service=8
+t= 284 | FINISH | P1 job (released 280) done (on time) (deadline was 300)
+t= 285 | FINISH | P3 job (released 270) done (on time) (deadline was 295)
+t= 293 | FINISH | P4 job (released 280) done (on time) (deadline was 315)
+t= 294 | FINISH | P5 job (released 200) done -- LATE (deadline was 245)
+t= 295 | MISS   | P5 missed its deadline (remaining=4 at deadline)
+t= 300 | ARRIVE | P1 job released, deadline=320, service=4
+t= 300 | ARRIVE | P2 job released, deadline=325, service=5
+t= 300 | ARRIVE | P3 job released, deadline=325, service=6
+t= 300 | ARRIVE | P5 job released, deadline=345, service=10
+t= 304 | FINISH | P1 job (released 300) done (on time) (deadline was 320)
+t= 309 | FINISH | P2 job (released 300) done (on time) (deadline was 325)
+t= 315 | FINISH | P3 job (released 300) done (on time) (deadline was 325)
+t= 319 | FINISH | P5 job (released 250) done -- LATE (deadline was 295)
+t= 320 | ARRIVE | P1 job released, deadline=340, service=4
+t= 320 | ARRIVE | P4 job released, deadline=355, service=8
+t= 324 | FINISH | P1 job (released 320) done (on time) (deadline was 340)
+t= 325 | ARRIVE | P2 job released, deadline=350, service=5
+t= 330 | FINISH | P2 job (released 325) done (on time) (deadline was 350)
+t= 330 | ARRIVE | P3 job released, deadline=355, service=6
+t= 336 | FINISH | P3 job (released 330) done (on time) (deadline was 355)
+t= 340 | ARRIVE | P1 job released, deadline=360, service=4
+t= 344 | FINISH | P1 job (released 340) done (on time) (deadline was 360)
+t= 345 | MISS   | P5 missed its deadline (remaining=9 at deadline)
+t= 347 | FINISH | P4 job (released 320) done (on time) (deadline was 355)
+t= 350 | ARRIVE | P2 job released, deadline=375, service=5
+t= 350 | ARRIVE | P5 job released, deadline=395, service=10
+t= 355 | FINISH | P2 job (released 350) done (on time) (deadline was 375)
+t= 360 | ARRIVE | P1 job released, deadline=380, service=4
+t= 360 | ARRIVE | P3 job released, deadline=385, service=6
+t= 360 | ARRIVE | P4 job released, deadline=395, service=8
+t= 364 | FINISH | P1 job (released 360) done (on time) (deadline was 380)
+t= 370 | FINISH | P3 job (released 360) done (on time) (deadline was 385)
+t= 375 | ARRIVE | P2 job released, deadline=400, service=5
+t= 380 | FINISH | P2 job (released 375) done (on time) (deadline was 400)
+t= 380 | ARRIVE | P1 job released, deadline=400, service=4
+t= 384 | FINISH | P1 job (released 380) done (on time) (deadline was 400)
+t= 387 | FINISH | P4 job (released 360) done (on time) (deadline was 395)
+t= 388 | FINISH | P5 job (released 300) done -- LATE (deadline was 345)
+t= 390 | ARRIVE | P3 job released, deadline=415, service=6
+t= 395 | MISS   | P5 missed its deadline (remaining=8 at deadline)
+t= 396 | FINISH | P3 job (released 390) done (on time) (deadline was 415)
+t= 400 | ARRIVE | P1 job released, deadline=420, service=4
+t= 400 | ARRIVE | P2 job released, deadline=425, service=5
+t= 400 | ARRIVE | P4 job released, deadline=435, service=8
+t= 400 | ARRIVE | P5 job released, deadline=445, service=10
+t= 404 | FINISH | P1 job (released 400) done (on time) (deadline was 420)
+t= 409 | FINISH | P2 job (released 400) done (on time) (deadline was 425)
+
+--- Summary ---
+DM Results:
+
+Schedule feasible from 0 to 35 units. At 35, process 4 did not meet deadline. CPU time took 413 units (simulated for 413 units, 100.0% utilization, 9 total deadline miss(es).
+
+Process 1: Arrival Time: 0, Service: 4, Relative Deadline: 20, Period: 20, finish: 4, 24, 44, 64, 84, 104, 124, 144, 164, 184, 204, 224, 244, 264, 284, 304, 324, 344, 364, 384, 404.
+Process 2: Arrival Time: 0, Service: 5, Relative Deadline: 25, Period: 25, finish: 9, 30, 55, 80, 109, 130, 155, 180, 209, 230, 255, 280, 309, 330, 355, 380, 409.
+Process 3: Arrival Time: 0, Service: 6, Relative Deadline: 25, Period: 30, finish: 15, 36, 70, 96, 135, 165, 190, 216, 250, 285, 315, 336, 370, 396.
+Process 4: Arrival Time: 0, Service: 8, Relative Deadline: 35, Period: 40, finish: 38, 57, 98, 147, 173, 232, 267, 293, 347, 387.  [1 missed]
+Process 5: Arrival Time: 0, Service: 10, Relative Deadline: 45, Period: 50, finish: 75, 117, 192, 234, 294, 319, 388.  [8 missed]
+
+==============================================================================
+EDF  (simulated horizon = 500 units)
+==============================================================================
+--- Event trace (sorted chronologically) ---
+t=   0 | ARRIVE | P1 job released, deadline=20, service=4
+t=   0 | ARRIVE | P2 job released, deadline=25, service=5
+t=   0 | ARRIVE | P3 job released, deadline=25, service=6
+t=   0 | ARRIVE | P4 job released, deadline=35, service=8
+t=   0 | ARRIVE | P5 job released, deadline=45, service=10
+t=   4 | FINISH | P1 job (released 0) done (on time) (deadline was 20)
+t=   9 | FINISH | P2 job (released 0) done (on time) (deadline was 25)
+t=  15 | FINISH | P3 job (released 0) done (on time) (deadline was 25)
+t=  20 | ARRIVE | P1 job released, deadline=40, service=4
+t=  23 | FINISH | P4 job (released 0) done (on time) (deadline was 35)
+t=  25 | ARRIVE | P2 job released, deadline=50, service=5
+t=  27 | FINISH | P1 job (released 20) done (on time) (deadline was 40)
+t=  30 | ARRIVE | P3 job released, deadline=55, service=6
+t=  37 | FINISH | P5 job (released 0) done (on time) (deadline was 45)
+t=  40 | ARRIVE | P1 job released, deadline=60, service=4
+t=  40 | ARRIVE | P4 job released, deadline=75, service=8
+t=  42 | FINISH | P2 job (released 25) done (on time) (deadline was 50)
+t=  48 | FINISH | P3 job (released 30) done (on time) (deadline was 55)
+t=  50 | ARRIVE | P2 job released, deadline=75, service=5
+t=  50 | ARRIVE | P5 job released, deadline=95, service=10
+t=  52 | FINISH | P1 job (released 40) done (on time) (deadline was 60)
+t=  57 | FINISH | P2 job (released 50) done (on time) (deadline was 75)
+t=  60 | ARRIVE | P1 job released, deadline=80, service=4
+t=  60 | ARRIVE | P3 job released, deadline=85, service=6
+t=  65 | FINISH | P4 job (released 40) done (on time) (deadline was 75)
+t=  69 | FINISH | P1 job (released 60) done (on time) (deadline was 80)
+t=  75 | FINISH | P3 job (released 60) done (on time) (deadline was 85)
+t=  75 | ARRIVE | P2 job released, deadline=100, service=5
+t=  80 | ARRIVE | P1 job released, deadline=100, service=4
+t=  80 | ARRIVE | P4 job released, deadline=115, service=8
+t=  85 | FINISH | P5 job (released 50) done (on time) (deadline was 95)
+t=  89 | FINISH | P1 job (released 80) done (on time) (deadline was 100)
+t=  90 | ARRIVE | P3 job released, deadline=115, service=6
+t=  94 | FINISH | P2 job (released 75) done (on time) (deadline was 100)
+t= 100 | FINISH | P3 job (released 90) done (on time) (deadline was 115)
+t= 100 | ARRIVE | P1 job released, deadline=120, service=4
+t= 100 | ARRIVE | P2 job released, deadline=125, service=5
+t= 100 | ARRIVE | P5 job released, deadline=145, service=10
+t= 108 | FINISH | P4 job (released 80) done (on time) (deadline was 115)
+t= 112 | FINISH | P1 job (released 100) done (on time) (deadline was 120)
+t= 117 | FINISH | P2 job (released 100) done (on time) (deadline was 125)
+t= 120 | ARRIVE | P1 job released, deadline=140, service=4
+t= 120 | ARRIVE | P3 job released, deadline=145, service=6
+t= 120 | ARRIVE | P4 job released, deadline=155, service=8
+t= 124 | FINISH | P1 job (released 120) done (on time) (deadline was 140)
+t= 125 | ARRIVE | P2 job released, deadline=150, service=5
+t= 130 | FINISH | P3 job (released 120) done (on time) (deadline was 145)
+t= 137 | FINISH | P5 job (released 100) done (on time) (deadline was 145)
+t= 140 | ARRIVE | P1 job released, deadline=160, service=4
+t= 142 | FINISH | P2 job (released 125) done (on time) (deadline was 150)
+t= 150 | FINISH | P4 job (released 120) done (on time) (deadline was 155)
+t= 150 | ARRIVE | P2 job released, deadline=175, service=5
+t= 150 | ARRIVE | P3 job released, deadline=175, service=6
+t= 150 | ARRIVE | P5 job released, deadline=195, service=10
+t= 154 | FINISH | P1 job (released 140) done (on time) (deadline was 160)
+t= 159 | FINISH | P2 job (released 150) done (on time) (deadline was 175)
+t= 160 | ARRIVE | P1 job released, deadline=180, service=4
+t= 160 | ARRIVE | P4 job released, deadline=195, service=8
+t= 165 | FINISH | P3 job (released 150) done (on time) (deadline was 175)
+t= 169 | FINISH | P1 job (released 160) done (on time) (deadline was 180)
+t= 175 | ARRIVE | P2 job released, deadline=200, service=5
+t= 177 | FINISH | P4 job (released 160) done (on time) (deadline was 195)
+t= 180 | ARRIVE | P1 job released, deadline=200, service=4
+t= 180 | ARRIVE | P3 job released, deadline=205, service=6
+t= 187 | FINISH | P5 job (released 150) done (on time) (deadline was 195)
+t= 191 | FINISH | P1 job (released 180) done (on time) (deadline was 200)
+t= 196 | FINISH | P2 job (released 175) done (on time) (deadline was 200)
+t= 200 | ARRIVE | P1 job released, deadline=220, service=4
+t= 200 | ARRIVE | P2 job released, deadline=225, service=5
+t= 200 | ARRIVE | P4 job released, deadline=235, service=8
+t= 200 | ARRIVE | P5 job released, deadline=245, service=10
+t= 202 | FINISH | P3 job (released 180) done (on time) (deadline was 205)
+t= 206 | FINISH | P1 job (released 200) done (on time) (deadline was 220)
+t= 210 | ARRIVE | P3 job released, deadline=235, service=6
+t= 211 | FINISH | P2 job (released 200) done (on time) (deadline was 225)
+t= 217 | FINISH | P3 job (released 210) done (on time) (deadline was 235)
+t= 220 | ARRIVE | P1 job released, deadline=240, service=4
+t= 225 | FINISH | P4 job (released 200) done (on time) (deadline was 235)
+t= 225 | ARRIVE | P2 job released, deadline=250, service=5
+t= 229 | FINISH | P1 job (released 220) done (on time) (deadline was 240)
+t= 239 | FINISH | P5 job (released 200) done (on time) (deadline was 245)
+t= 240 | ARRIVE | P1 job released, deadline=260, service=4
+t= 240 | ARRIVE | P3 job released, deadline=265, service=6
+t= 240 | ARRIVE | P4 job released, deadline=275, service=8
+t= 244 | FINISH | P2 job (released 225) done (on time) (deadline was 250)
+t= 248 | FINISH | P1 job (released 240) done (on time) (deadline was 260)
+t= 250 | ARRIVE | P2 job released, deadline=275, service=5
+t= 250 | ARRIVE | P5 job released, deadline=295, service=10
+t= 254 | FINISH | P3 job (released 240) done (on time) (deadline was 265)
+t= 259 | FINISH | P2 job (released 250) done (on time) (deadline was 275)
+t= 260 | ARRIVE | P1 job released, deadline=280, service=4
+t= 267 | FINISH | P4 job (released 240) done (on time) (deadline was 275)
+t= 270 | ARRIVE | P3 job released, deadline=295, service=6
+t= 271 | FINISH | P1 job (released 260) done (on time) (deadline was 280)
+t= 275 | ARRIVE | P2 job released, deadline=300, service=5
+t= 277 | FINISH | P3 job (released 270) done (on time) (deadline was 295)
+t= 280 | ARRIVE | P1 job released, deadline=300, service=4
+t= 280 | ARRIVE | P4 job released, deadline=315, service=8
+t= 287 | FINISH | P5 job (released 250) done (on time) (deadline was 295)
+t= 291 | FINISH | P1 job (released 280) done (on time) (deadline was 300)
+t= 296 | FINISH | P2 job (released 275) done (on time) (deadline was 300)
+t= 300 | ARRIVE | P1 job released, deadline=320, service=4
+t= 300 | ARRIVE | P2 job released, deadline=325, service=5
+t= 300 | ARRIVE | P3 job released, deadline=325, service=6
+t= 300 | ARRIVE | P5 job released, deadline=345, service=10
+t= 304 | FINISH | P4 job (released 280) done (on time) (deadline was 315)
+t= 308 | FINISH | P1 job (released 300) done (on time) (deadline was 320)
+t= 313 | FINISH | P2 job (released 300) done (on time) (deadline was 325)
+t= 319 | FINISH | P3 job (released 300) done (on time) (deadline was 325)
+t= 320 | ARRIVE | P1 job released, deadline=340, service=4
+t= 320 | ARRIVE | P4 job released, deadline=355, service=8
+t= 324 | FINISH | P1 job (released 320) done (on time) (deadline was 340)
+t= 325 | ARRIVE | P2 job released, deadline=350, service=5
+t= 330 | ARRIVE | P3 job released, deadline=355, service=6
+t= 333 | FINISH | P5 job (released 300) done (on time) (deadline was 345)
+t= 338 | FINISH | P2 job (released 325) done (on time) (deadline was 350)
+t= 340 | ARRIVE | P1 job released, deadline=360, service=4
+t= 344 | FINISH | P3 job (released 330) done (on time) (deadline was 355)
+t= 350 | ARRIVE | P2 job released, deadline=375, service=5
+t= 350 | ARRIVE | P5 job released, deadline=395, service=10
+t= 352 | FINISH | P4 job (released 320) done (on time) (deadline was 355)
+t= 356 | FINISH | P1 job (released 340) done (on time) (deadline was 360)
+t= 360 | ARRIVE | P1 job released, deadline=380, service=4
+t= 360 | ARRIVE | P3 job released, deadline=385, service=6
+t= 360 | ARRIVE | P4 job released, deadline=395, service=8
+t= 361 | FINISH | P2 job (released 350) done (on time) (deadline was 375)
+t= 365 | FINISH | P1 job (released 360) done (on time) (deadline was 380)
+t= 371 | FINISH | P3 job (released 360) done (on time) (deadline was 385)
+t= 375 | ARRIVE | P2 job released, deadline=400, service=5
+t= 379 | FINISH | P4 job (released 360) done (on time) (deadline was 395)
+t= 380 | ARRIVE | P1 job released, deadline=400, service=4
+t= 389 | FINISH | P5 job (released 350) done (on time) (deadline was 395)
+t= 390 | ARRIVE | P3 job released, deadline=415, service=6
+t= 393 | FINISH | P1 job (released 380) done (on time) (deadline was 400)
+t= 398 | FINISH | P2 job (released 375) done (on time) (deadline was 400)
+t= 400 | ARRIVE | P1 job released, deadline=420, service=4
+t= 400 | ARRIVE | P2 job released, deadline=425, service=5
+t= 400 | ARRIVE | P4 job released, deadline=435, service=8
+t= 400 | ARRIVE | P5 job released, deadline=445, service=10
+t= 404 | FINISH | P3 job (released 390) done (on time) (deadline was 415)
+t= 408 | FINISH | P1 job (released 400) done (on time) (deadline was 420)
+t= 413 | FINISH | P2 job (released 400) done (on time) (deadline was 425)
+t= 420 | ARRIVE | P1 job released, deadline=440, service=4
+t= 420 | ARRIVE | P3 job released, deadline=445, service=6
+t= 421 | FINISH | P4 job (released 400) done (on time) (deadline was 435)
+t= 425 | FINISH | P1 job (released 420) done (on time) (deadline was 440)
+t= 425 | ARRIVE | P2 job released, deadline=450, service=5
+t= 431 | FINISH | P3 job (released 420) done (on time) (deadline was 445)
+t= 440 | ARRIVE | P1 job released, deadline=460, service=4
+t= 440 | ARRIVE | P4 job released, deadline=475, service=8
+t= 441 | FINISH | P5 job (released 400) done (on time) (deadline was 445)
+t= 446 | FINISH | P2 job (released 425) done (on time) (deadline was 450)
+t= 450 | FINISH | P1 job (released 440) done (on time) (deadline was 460)
+t= 450 | ARRIVE | P2 job released, deadline=475, service=5
+t= 450 | ARRIVE | P3 job released, deadline=475, service=6
+t= 450 | ARRIVE | P5 job released, deadline=495, service=10
+t= 455 | FINISH | P2 job (released 450) done (on time) (deadline was 475)
+t= 460 | ARRIVE | P1 job released, deadline=480, service=4
+t= 461 | FINISH | P3 job (released 450) done (on time) (deadline was 475)
+t= 469 | FINISH | P4 job (released 440) done (on time) (deadline was 475)
+t= 473 | FINISH | P1 job (released 460) done (on time) (deadline was 480)
+t= 475 | ARRIVE | P2 job released, deadline=500, service=5
+t= 480 | ARRIVE | P1 job released, deadline=500, service=4
+t= 480 | ARRIVE | P3 job released, deadline=505, service=6
+t= 480 | ARRIVE | P4 job released, deadline=515, service=8
+t= 483 | FINISH | P5 job (released 450) done (on time) (deadline was 495)
+t= 487 | FINISH | P1 job (released 480) done (on time) (deadline was 500)
+t= 492 | FINISH | P2 job (released 475) done (on time) (deadline was 500)
+t= 498 | FINISH | P3 job (released 480) done (on time) (deadline was 505)
+
+--- Summary ---
+EDF Results:
+
+Schedule feasible for the entire simulated window (0 to 500 units). No deadlines missed. CPU time took 500 units (100.0% utilization).
+
+Process 1: Arrival Time: 0, Service: 4, Relative Deadline: 20, Period: 20, finish: 4, 27, 52, 69, 89, 112, 124, 154, 169, 191, 206, 229, 248, 271, 291, 308, 324, 356, 365, 393, 408, 425, 450, 473, 487.
+Process 2: Arrival Time: 0, Service: 5, Relative Deadline: 25, Period: 25, finish: 9, 42, 57, 94, 117, 142, 159, 196, 211, 244, 259, 296, 313, 338, 361, 398, 413, 446, 455, 492.
+Process 3: Arrival Time: 0, Service: 6, Relative Deadline: 25, Period: 30, finish: 15, 48, 75, 100, 130, 165, 202, 217, 254, 277, 319, 344, 371, 404, 431, 461, 498.
+Process 4: Arrival Time: 0, Service: 8, Relative Deadline: 35, Period: 40, finish: 23, 65, 108, 150, 177, 225, 267, 304, 352, 379, 421, 469.
+Process 5: Arrival Time: 0, Service: 10, Relative Deadline: 45, Period: 50, finish: 37, 85, 137, 187, 239, 287, 333, 389, 441, 483.
+
+
+########## custom_input2_3_results.log ##########
+INPUT FILE: custom_input2_3.txt
+Processes: 5, switch overhead: 0
+
+==============================================================================
+RM  (simulated horizon = 101 units)
+==============================================================================
+--- Event trace (sorted chronologically) ---
+t=   0 | ARRIVE | P1 job released, deadline=9, service=5
+t=   0 | ARRIVE | P2 job released, deadline=6, service=2
+t=   0 | ARRIVE | P3 job released, deadline=18, service=1
+t=   0 | ARRIVE | P4 job released, deadline=25, service=1
+t=   0 | ARRIVE | P5 job released, deadline=35, service=1
+t=   5 | FINISH | P1 job (released 0) done (on time) (deadline was 9)
+t=   7 | FINISH | P2 job (released 0) done -- LATE (deadline was 6)
+t=   8 | FINISH | P3 job (released 0) done (on time) (deadline was 18)
+t=   9 | FINISH | P4 job (released 0) done (on time) (deadline was 25)
+t=  10 | FINISH | P5 job (released 0) done (on time) (deadline was 35)
+t=  10 | ARRIVE | P1 job released, deadline=19, service=5
+t=  12 | ARRIVE | P2 job released, deadline=18, service=2
+t=  15 | FINISH | P1 job (released 10) done (on time) (deadline was 19)
+t=  17 | FINISH | P2 job (released 12) done (on time) (deadline was 18)
+t=  20 | ARRIVE | P1 job released, deadline=29, service=5
+t=  20 | ARRIVE | P3 job released, deadline=38, service=1
+t=  24 | ARRIVE | P2 job released, deadline=30, service=2
+t=  25 | FINISH | P1 job (released 20) done (on time) (deadline was 29)
+t=  27 | FINISH | P2 job (released 24) done (on time) (deadline was 30)
+t=  28 | FINISH | P3 job (released 20) done (on time) (deadline was 38)
+t=  30 | ARRIVE | P1 job released, deadline=39, service=5
+t=  30 | ARRIVE | P4 job released, deadline=55, service=1
+t=  35 | FINISH | P1 job (released 30) done (on time) (deadline was 39)
+t=  36 | FINISH | P4 job (released 30) done (on time) (deadline was 55)
+t=  36 | ARRIVE | P2 job released, deadline=42, service=2
+t=  38 | FINISH | P2 job (released 36) done (on time) (deadline was 42)
+t=  40 | ARRIVE | P1 job released, deadline=49, service=5
+t=  40 | ARRIVE | P3 job released, deadline=58, service=1
+t=  40 | ARRIVE | P5 job released, deadline=75, service=1
+t=  45 | FINISH | P1 job (released 40) done (on time) (deadline was 49)
+t=  46 | FINISH | P3 job (released 40) done (on time) (deadline was 58)
+t=  47 | FINISH | P5 job (released 40) done (on time) (deadline was 75)
+t=  48 | ARRIVE | P2 job released, deadline=54, service=2
+t=  50 | FINISH | P2 job (released 48) done (on time) (deadline was 54)
+t=  50 | ARRIVE | P1 job released, deadline=59, service=5
+t=  55 | FINISH | P1 job (released 50) done (on time) (deadline was 59)
+t=  60 | ARRIVE | P1 job released, deadline=69, service=5
+t=  60 | ARRIVE | P2 job released, deadline=66, service=2
+t=  60 | ARRIVE | P3 job released, deadline=78, service=1
+t=  60 | ARRIVE | P4 job released, deadline=85, service=1
+t=  65 | FINISH | P1 job (released 60) done (on time) (deadline was 69)
+t=  67 | FINISH | P2 job (released 60) done -- LATE (deadline was 66)
+t=  68 | FINISH | P3 job (released 60) done (on time) (deadline was 78)
+t=  69 | FINISH | P4 job (released 60) done (on time) (deadline was 85)
+t=  70 | ARRIVE | P1 job released, deadline=79, service=5
+t=  72 | ARRIVE | P2 job released, deadline=78, service=2
+t=  75 | FINISH | P1 job (released 70) done (on time) (deadline was 79)
+t=  77 | FINISH | P2 job (released 72) done (on time) (deadline was 78)
+t=  80 | ARRIVE | P1 job released, deadline=89, service=5
+t=  80 | ARRIVE | P3 job released, deadline=98, service=1
+t=  80 | ARRIVE | P5 job released, deadline=115, service=1
+t=  84 | ARRIVE | P2 job released, deadline=90, service=2
+t=  85 | FINISH | P1 job (released 80) done (on time) (deadline was 89)
+t=  87 | FINISH | P2 job (released 84) done (on time) (deadline was 90)
+t=  88 | FINISH | P3 job (released 80) done (on time) (deadline was 98)
+t=  89 | FINISH | P5 job (released 80) done (on time) (deadline was 115)
+t=  90 | ARRIVE | P1 job released, deadline=99, service=5
+t=  90 | ARRIVE | P4 job released, deadline=115, service=1
+t=  95 | FINISH | P1 job (released 90) done (on time) (deadline was 99)
+t=  96 | FINISH | P4 job (released 90) done (on time) (deadline was 115)
+t=  96 | ARRIVE | P2 job released, deadline=102, service=2
+t=  98 | FINISH | P2 job (released 96) done (on time) (deadline was 102)
+t= 100 | ARRIVE | P1 job released, deadline=109, service=5
+t= 100 | ARRIVE | P3 job released, deadline=118, service=1
+
+--- Summary ---
+RM Results:
+
+Schedule feasible from 0 to 6 units. At 6, process 2 did not meet deadline. CPU time took 81 units (simulated for 101 units, 80.2% utilization, 2 total deadline miss(es).
+
+Process 1: Arrival Time: 0, Service: 5, Relative Deadline: 9, Period: 10, finish: 5, 15, 25, 35, 45, 55, 65, 75, 85, 95.
+Process 2: Arrival Time: 0, Service: 2, Relative Deadline: 6, Period: 12, finish: 7, 17, 27, 38, 50, 67, 77, 87, 98.  [2 missed]
+Process 3: Arrival Time: 0, Service: 1, Relative Deadline: 18, Period: 20, finish: 8, 28, 46, 68, 88.
+Process 4: Arrival Time: 0, Service: 1, Relative Deadline: 25, Period: 30, finish: 9, 36, 69, 96.
+Process 5: Arrival Time: 0, Service: 1, Relative Deadline: 35, Period: 40, finish: 10, 47, 89.
+
+==============================================================================
+DM  (simulated horizon = 413 units)
+==============================================================================
+--- Event trace (sorted chronologically) ---
+t=   0 | ARRIVE | P1 job released, deadline=9, service=5
+t=   0 | ARRIVE | P2 job released, deadline=6, service=2
+t=   0 | ARRIVE | P3 job released, deadline=18, service=1
+t=   0 | ARRIVE | P4 job released, deadline=25, service=1
+t=   0 | ARRIVE | P5 job released, deadline=35, service=1
+t=   2 | FINISH | P2 job (released 0) done (on time) (deadline was 6)
+t=   7 | FINISH | P1 job (released 0) done (on time) (deadline was 9)
+t=   8 | FINISH | P3 job (released 0) done (on time) (deadline was 18)
+t=   9 | FINISH | P4 job (released 0) done (on time) (deadline was 25)
+t=  10 | FINISH | P5 job (released 0) done (on time) (deadline was 35)
+t=  10 | ARRIVE | P1 job released, deadline=19, service=5
+t=  12 | ARRIVE | P2 job released, deadline=18, service=2
+t=  14 | FINISH | P2 job (released 12) done (on time) (deadline was 18)
+t=  17 | FINISH | P1 job (released 10) done (on time) (deadline was 19)
+t=  20 | ARRIVE | P1 job released, deadline=29, service=5
+t=  20 | ARRIVE | P3 job released, deadline=38, service=1
+t=  24 | ARRIVE | P2 job released, deadline=30, service=2
+t=  26 | FINISH | P2 job (released 24) done (on time) (deadline was 30)
+t=  27 | FINISH | P1 job (released 20) done (on time) (deadline was 29)
+t=  28 | FINISH | P3 job (released 20) done (on time) (deadline was 38)
+t=  30 | ARRIVE | P1 job released, deadline=39, service=5
+t=  30 | ARRIVE | P4 job released, deadline=55, service=1
+t=  35 | FINISH | P1 job (released 30) done (on time) (deadline was 39)
+t=  36 | FINISH | P4 job (released 30) done (on time) (deadline was 55)
+t=  36 | ARRIVE | P2 job released, deadline=42, service=2
+t=  38 | FINISH | P2 job (released 36) done (on time) (deadline was 42)
+t=  40 | ARRIVE | P1 job released, deadline=49, service=5
+t=  40 | ARRIVE | P3 job released, deadline=58, service=1
+t=  40 | ARRIVE | P5 job released, deadline=75, service=1
+t=  45 | FINISH | P1 job (released 40) done (on time) (deadline was 49)
+t=  46 | FINISH | P3 job (released 40) done (on time) (deadline was 58)
+t=  47 | FINISH | P5 job (released 40) done (on time) (deadline was 75)
+t=  48 | ARRIVE | P2 job released, deadline=54, service=2
+t=  50 | FINISH | P2 job (released 48) done (on time) (deadline was 54)
+t=  50 | ARRIVE | P1 job released, deadline=59, service=5
+t=  55 | FINISH | P1 job (released 50) done (on time) (deadline was 59)
+t=  60 | ARRIVE | P1 job released, deadline=69, service=5
+t=  60 | ARRIVE | P2 job released, deadline=66, service=2
+t=  60 | ARRIVE | P3 job released, deadline=78, service=1
+t=  60 | ARRIVE | P4 job released, deadline=85, service=1
+t=  62 | FINISH | P2 job (released 60) done (on time) (deadline was 66)
+t=  67 | FINISH | P1 job (released 60) done (on time) (deadline was 69)
+t=  68 | FINISH | P3 job (released 60) done (on time) (deadline was 78)
+t=  69 | FINISH | P4 job (released 60) done (on time) (deadline was 85)
+t=  70 | ARRIVE | P1 job released, deadline=79, service=5
+t=  72 | ARRIVE | P2 job released, deadline=78, service=2
+t=  74 | FINISH | P2 job (released 72) done (on time) (deadline was 78)
+t=  77 | FINISH | P1 job (released 70) done (on time) (deadline was 79)
+t=  80 | ARRIVE | P1 job released, deadline=89, service=5
+t=  80 | ARRIVE | P3 job released, deadline=98, service=1
+t=  80 | ARRIVE | P5 job released, deadline=115, service=1
+t=  84 | ARRIVE | P2 job released, deadline=90, service=2
+t=  86 | FINISH | P2 job (released 84) done (on time) (deadline was 90)
+t=  87 | FINISH | P1 job (released 80) done (on time) (deadline was 89)
+t=  88 | FINISH | P3 job (released 80) done (on time) (deadline was 98)
+t=  89 | FINISH | P5 job (released 80) done (on time) (deadline was 115)
+t=  90 | ARRIVE | P1 job released, deadline=99, service=5
+t=  90 | ARRIVE | P4 job released, deadline=115, service=1
+t=  95 | FINISH | P1 job (released 90) done (on time) (deadline was 99)
+t=  96 | FINISH | P4 job (released 90) done (on time) (deadline was 115)
+t=  96 | ARRIVE | P2 job released, deadline=102, service=2
+t=  98 | FINISH | P2 job (released 96) done (on time) (deadline was 102)
+t= 100 | ARRIVE | P1 job released, deadline=109, service=5
+t= 100 | ARRIVE | P3 job released, deadline=118, service=1
+t= 105 | FINISH | P1 job (released 100) done (on time) (deadline was 109)
+t= 106 | FINISH | P3 job (released 100) done (on time) (deadline was 118)
+t= 108 | ARRIVE | P2 job released, deadline=114, service=2
+t= 110 | FINISH | P2 job (released 108) done (on time) (deadline was 114)
+t= 110 | ARRIVE | P1 job released, deadline=119, service=5
+t= 115 | FINISH | P1 job (released 110) done (on time) (deadline was 119)
+t= 120 | ARRIVE | P1 job released, deadline=129, service=5
+t= 120 | ARRIVE | P2 job released, deadline=126, service=2
+t= 120 | ARRIVE | P3 job released, deadline=138, service=1
+t= 120 | ARRIVE | P4 job released, deadline=145, service=1
+t= 120 | ARRIVE | P5 job released, deadline=155, service=1
+t= 122 | FINISH | P2 job (released 120) done (on time) (deadline was 126)
+t= 127 | FINISH | P1 job (released 120) done (on time) (deadline was 129)
+t= 128 | FINISH | P3 job (released 120) done (on time) (deadline was 138)
+t= 129 | FINISH | P4 job (released 120) done (on time) (deadline was 145)
+t= 130 | FINISH | P5 job (released 120) done (on time) (deadline was 155)
+t= 130 | ARRIVE | P1 job released, deadline=139, service=5
+t= 132 | ARRIVE | P2 job released, deadline=138, service=2
+t= 134 | FINISH | P2 job (released 132) done (on time) (deadline was 138)
+t= 137 | FINISH | P1 job (released 130) done (on time) (deadline was 139)
+t= 140 | ARRIVE | P1 job released, deadline=149, service=5
+t= 140 | ARRIVE | P3 job released, deadline=158, service=1
+t= 144 | ARRIVE | P2 job released, deadline=150, service=2
+t= 146 | FINISH | P2 job (released 144) done (on time) (deadline was 150)
+t= 147 | FINISH | P1 job (released 140) done (on time) (deadline was 149)
+t= 148 | FINISH | P3 job (released 140) done (on time) (deadline was 158)
+t= 150 | ARRIVE | P1 job released, deadline=159, service=5
+t= 150 | ARRIVE | P4 job released, deadline=175, service=1
+t= 155 | FINISH | P1 job (released 150) done (on time) (deadline was 159)
+t= 156 | FINISH | P4 job (released 150) done (on time) (deadline was 175)
+t= 156 | ARRIVE | P2 job released, deadline=162, service=2
+t= 158 | FINISH | P2 job (released 156) done (on time) (deadline was 162)
+t= 160 | ARRIVE | P1 job released, deadline=169, service=5
+t= 160 | ARRIVE | P3 job released, deadline=178, service=1
+t= 160 | ARRIVE | P5 job released, deadline=195, service=1
+t= 165 | FINISH | P1 job (released 160) done (on time) (deadline was 169)
+t= 166 | FINISH | P3 job (released 160) done (on time) (deadline was 178)
+t= 167 | FINISH | P5 job (released 160) done (on time) (deadline was 195)
+t= 168 | ARRIVE | P2 job released, deadline=174, service=2
+t= 170 | FINISH | P2 job (released 168) done (on time) (deadline was 174)
+t= 170 | ARRIVE | P1 job released, deadline=179, service=5
+t= 175 | FINISH | P1 job (released 170) done (on time) (deadline was 179)
+t= 180 | ARRIVE | P1 job released, deadline=189, service=5
+t= 180 | ARRIVE | P2 job released, deadline=186, service=2
+t= 180 | ARRIVE | P3 job released, deadline=198, service=1
+t= 180 | ARRIVE | P4 job released, deadline=205, service=1
+t= 182 | FINISH | P2 job (released 180) done (on time) (deadline was 186)
+t= 187 | FINISH | P1 job (released 180) done (on time) (deadline was 189)
+t= 188 | FINISH | P3 job (released 180) done (on time) (deadline was 198)
+t= 189 | FINISH | P4 job (released 180) done (on time) (deadline was 205)
+t= 190 | ARRIVE | P1 job released, deadline=199, service=5
+t= 192 | ARRIVE | P2 job released, deadline=198, service=2
+t= 194 | FINISH | P2 job (released 192) done (on time) (deadline was 198)
+t= 197 | FINISH | P1 job (released 190) done (on time) (deadline was 199)
+t= 200 | ARRIVE | P1 job released, deadline=209, service=5
+t= 200 | ARRIVE | P3 job released, deadline=218, service=1
+t= 200 | ARRIVE | P5 job released, deadline=235, service=1
+t= 204 | ARRIVE | P2 job released, deadline=210, service=2
+t= 206 | FINISH | P2 job (released 204) done (on time) (deadline was 210)
+t= 207 | FINISH | P1 job (released 200) done (on time) (deadline was 209)
+t= 208 | FINISH | P3 job (released 200) done (on time) (deadline was 218)
+t= 209 | FINISH | P5 job (released 200) done (on time) (deadline was 235)
+t= 210 | ARRIVE | P1 job released, deadline=219, service=5
+t= 210 | ARRIVE | P4 job released, deadline=235, service=1
+t= 215 | FINISH | P1 job (released 210) done (on time) (deadline was 219)
+t= 216 | FINISH | P4 job (released 210) done (on time) (deadline was 235)
+t= 216 | ARRIVE | P2 job released, deadline=222, service=2
+t= 218 | FINISH | P2 job (released 216) done (on time) (deadline was 222)
+t= 220 | ARRIVE | P1 job released, deadline=229, service=5
+t= 220 | ARRIVE | P3 job released, deadline=238, service=1
+t= 225 | FINISH | P1 job (released 220) done (on time) (deadline was 229)
+t= 226 | FINISH | P3 job (released 220) done (on time) (deadline was 238)
+t= 228 | ARRIVE | P2 job released, deadline=234, service=2
+t= 230 | FINISH | P2 job (released 228) done (on time) (deadline was 234)
+t= 230 | ARRIVE | P1 job released, deadline=239, service=5
+t= 235 | FINISH | P1 job (released 230) done (on time) (deadline was 239)
+t= 240 | ARRIVE | P1 job released, deadline=249, service=5
+t= 240 | ARRIVE | P2 job released, deadline=246, service=2
+t= 240 | ARRIVE | P3 job released, deadline=258, service=1
+t= 240 | ARRIVE | P4 job released, deadline=265, service=1
+t= 240 | ARRIVE | P5 job released, deadline=275, service=1
+t= 242 | FINISH | P2 job (released 240) done (on time) (deadline was 246)
+t= 247 | FINISH | P1 job (released 240) done (on time) (deadline was 249)
+t= 248 | FINISH | P3 job (released 240) done (on time) (deadline was 258)
+t= 249 | FINISH | P4 job (released 240) done (on time) (deadline was 265)
+t= 250 | FINISH | P5 job (released 240) done (on time) (deadline was 275)
+t= 250 | ARRIVE | P1 job released, deadline=259, service=5
+t= 252 | ARRIVE | P2 job released, deadline=258, service=2
+t= 254 | FINISH | P2 job (released 252) done (on time) (deadline was 258)
+t= 257 | FINISH | P1 job (released 250) done (on time) (deadline was 259)
+t= 260 | ARRIVE | P1 job released, deadline=269, service=5
+t= 260 | ARRIVE | P3 job released, deadline=278, service=1
+t= 264 | ARRIVE | P2 job released, deadline=270, service=2
+t= 266 | FINISH | P2 job (released 264) done (on time) (deadline was 270)
+t= 267 | FINISH | P1 job (released 260) done (on time) (deadline was 269)
+t= 268 | FINISH | P3 job (released 260) done (on time) (deadline was 278)
+t= 270 | ARRIVE | P1 job released, deadline=279, service=5
+t= 270 | ARRIVE | P4 job released, deadline=295, service=1
+t= 275 | FINISH | P1 job (released 270) done (on time) (deadline was 279)
+t= 276 | FINISH | P4 job (released 270) done (on time) (deadline was 295)
+t= 276 | ARRIVE | P2 job released, deadline=282, service=2
+t= 278 | FINISH | P2 job (released 276) done (on time) (deadline was 282)
+t= 280 | ARRIVE | P1 job released, deadline=289, service=5
+t= 280 | ARRIVE | P3 job released, deadline=298, service=1
+t= 280 | ARRIVE | P5 job released, deadline=315, service=1
+t= 285 | FINISH | P1 job (released 280) done (on time) (deadline was 289)
+t= 286 | FINISH | P3 job (released 280) done (on time) (deadline was 298)
+t= 287 | FINISH | P5 job (released 280) done (on time) (deadline was 315)
+t= 288 | ARRIVE | P2 job released, deadline=294, service=2
+t= 290 | FINISH | P2 job (released 288) done (on time) (deadline was 294)
+t= 290 | ARRIVE | P1 job released, deadline=299, service=5
+t= 295 | FINISH | P1 job (released 290) done (on time) (deadline was 299)
+t= 300 | ARRIVE | P1 job released, deadline=309, service=5
+t= 300 | ARRIVE | P2 job released, deadline=306, service=2
+t= 300 | ARRIVE | P3 job released, deadline=318, service=1
+t= 300 | ARRIVE | P4 job released, deadline=325, service=1
+t= 302 | FINISH | P2 job (released 300) done (on time) (deadline was 306)
+t= 307 | FINISH | P1 job (released 300) done (on time) (deadline was 309)
+t= 308 | FINISH | P3 job (released 300) done (on time) (deadline was 318)
+t= 309 | FINISH | P4 job (released 300) done (on time) (deadline was 325)
+t= 310 | ARRIVE | P1 job released, deadline=319, service=5
+t= 312 | ARRIVE | P2 job released, deadline=318, service=2
+t= 314 | FINISH | P2 job (released 312) done (on time) (deadline was 318)
+t= 317 | FINISH | P1 job (released 310) done (on time) (deadline was 319)
+t= 320 | ARRIVE | P1 job released, deadline=329, service=5
+t= 320 | ARRIVE | P3 job released, deadline=338, service=1
+t= 320 | ARRIVE | P5 job released, deadline=355, service=1
+t= 324 | ARRIVE | P2 job released, deadline=330, service=2
+t= 326 | FINISH | P2 job (released 324) done (on time) (deadline was 330)
+t= 327 | FINISH | P1 job (released 320) done (on time) (deadline was 329)
+t= 328 | FINISH | P3 job (released 320) done (on time) (deadline was 338)
+t= 329 | FINISH | P5 job (released 320) done (on time) (deadline was 355)
+t= 330 | ARRIVE | P1 job released, deadline=339, service=5
+t= 330 | ARRIVE | P4 job released, deadline=355, service=1
+t= 335 | FINISH | P1 job (released 330) done (on time) (deadline was 339)
+t= 336 | FINISH | P4 job (released 330) done (on time) (deadline was 355)
+t= 336 | ARRIVE | P2 job released, deadline=342, service=2
+t= 338 | FINISH | P2 job (released 336) done (on time) (deadline was 342)
+t= 340 | ARRIVE | P1 job released, deadline=349, service=5
+t= 340 | ARRIVE | P3 job released, deadline=358, service=1
+t= 345 | FINISH | P1 job (released 340) done (on time) (deadline was 349)
+t= 346 | FINISH | P3 job (released 340) done (on time) (deadline was 358)
+t= 348 | ARRIVE | P2 job released, deadline=354, service=2
+t= 350 | FINISH | P2 job (released 348) done (on time) (deadline was 354)
+t= 350 | ARRIVE | P1 job released, deadline=359, service=5
+t= 355 | FINISH | P1 job (released 350) done (on time) (deadline was 359)
+t= 360 | ARRIVE | P1 job released, deadline=369, service=5
+t= 360 | ARRIVE | P2 job released, deadline=366, service=2
+t= 360 | ARRIVE | P3 job released, deadline=378, service=1
+t= 360 | ARRIVE | P4 job released, deadline=385, service=1
+t= 360 | ARRIVE | P5 job released, deadline=395, service=1
+t= 362 | FINISH | P2 job (released 360) done (on time) (deadline was 366)
+t= 367 | FINISH | P1 job (released 360) done (on time) (deadline was 369)
+t= 368 | FINISH | P3 job (released 360) done (on time) (deadline was 378)
+t= 369 | FINISH | P4 job (released 360) done (on time) (deadline was 385)
+t= 370 | FINISH | P5 job (released 360) done (on time) (deadline was 395)
+t= 370 | ARRIVE | P1 job released, deadline=379, service=5
+t= 372 | ARRIVE | P2 job released, deadline=378, service=2
+t= 374 | FINISH | P2 job (released 372) done (on time) (deadline was 378)
+t= 377 | FINISH | P1 job (released 370) done (on time) (deadline was 379)
+t= 380 | ARRIVE | P1 job released, deadline=389, service=5
+t= 380 | ARRIVE | P3 job released, deadline=398, service=1
+t= 384 | ARRIVE | P2 job released, deadline=390, service=2
+t= 386 | FINISH | P2 job (released 384) done (on time) (deadline was 390)
+t= 387 | FINISH | P1 job (released 380) done (on time) (deadline was 389)
+t= 388 | FINISH | P3 job (released 380) done (on time) (deadline was 398)
+t= 390 | ARRIVE | P1 job released, deadline=399, service=5
+t= 390 | ARRIVE | P4 job released, deadline=415, service=1
+t= 395 | FINISH | P1 job (released 390) done (on time) (deadline was 399)
+t= 396 | FINISH | P4 job (released 390) done (on time) (deadline was 415)
+t= 396 | ARRIVE | P2 job released, deadline=402, service=2
+t= 398 | FINISH | P2 job (released 396) done (on time) (deadline was 402)
+t= 400 | ARRIVE | P1 job released, deadline=409, service=5
+t= 400 | ARRIVE | P3 job released, deadline=418, service=1
+t= 400 | ARRIVE | P5 job released, deadline=435, service=1
+t= 405 | FINISH | P1 job (released 400) done (on time) (deadline was 409)
+t= 406 | FINISH | P3 job (released 400) done (on time) (deadline was 418)
+t= 407 | FINISH | P5 job (released 400) done (on time) (deadline was 435)
+t= 408 | ARRIVE | P2 job released, deadline=414, service=2
+t= 410 | FINISH | P2 job (released 408) done (on time) (deadline was 414)
+t= 410 | ARRIVE | P1 job released, deadline=419, service=5
+
+--- Summary ---
+DM Results:
+
+Schedule feasible for the entire simulated window (0 to 413 units). No deadlines missed. CPU time took 324 units (78.5% utilization).
+
+Process 1: Arrival Time: 0, Service: 5, Relative Deadline: 9, Period: 10, finish: 7, 17, 27, 35, 45, 55, 67, 77, 87, 95, 105, 115, 127, 137, 147, 155, 165, 175, 187, 197, 207, 215, 225, 235, 247, 257, 267, 275, 285, 295, 307, 317, 327, 335, 345, 355, 367, 377, 387, 395, 405.
+Process 2: Arrival Time: 0, Service: 2, Relative Deadline: 6, Period: 12, finish: 2, 14, 26, 38, 50, 62, 74, 86, 98, 110, 122, 134, 146, 158, 170, 182, 194, 206, 218, 230, 242, 254, 266, 278, 290, 302, 314, 326, 338, 350, 362, 374, 386, 398, 410.
+Process 3: Arrival Time: 0, Service: 1, Relative Deadline: 18, Period: 20, finish: 8, 28, 46, 68, 88, 106, 128, 148, 166, 188, 208, 226, 248, 268, 286, 308, 328, 346, 368, 388, 406.
+Process 4: Arrival Time: 0, Service: 1, Relative Deadline: 25, Period: 30, finish: 9, 36, 69, 96, 129, 156, 189, 216, 249, 276, 309, 336, 369, 396.
+Process 5: Arrival Time: 0, Service: 1, Relative Deadline: 35, Period: 40, finish: 10, 47, 89, 130, 167, 209, 250, 287, 329, 370, 407.
+
+==============================================================================
+EDF  (simulated horizon = 500 units)
+==============================================================================
+--- Event trace (sorted chronologically) ---
+t=   0 | ARRIVE | P1 job released, deadline=9, service=5
+t=   0 | ARRIVE | P2 job released, deadline=6, service=2
+t=   0 | ARRIVE | P3 job released, deadline=18, service=1
+t=   0 | ARRIVE | P4 job released, deadline=25, service=1
+t=   0 | ARRIVE | P5 job released, deadline=35, service=1
+t=   2 | FINISH | P2 job (released 0) done (on time) (deadline was 6)
+t=   7 | FINISH | P1 job (released 0) done (on time) (deadline was 9)
+t=   8 | FINISH | P3 job (released 0) done (on time) (deadline was 18)
+t=   9 | FINISH | P4 job (released 0) done (on time) (deadline was 25)
+t=  10 | FINISH | P5 job (released 0) done (on time) (deadline was 35)
+t=  10 | ARRIVE | P1 job released, deadline=19, service=5
+t=  12 | ARRIVE | P2 job released, deadline=18, service=2
+t=  14 | FINISH | P2 job (released 12) done (on time) (deadline was 18)
+t=  17 | FINISH | P1 job (released 10) done (on time) (deadline was 19)
+t=  20 | ARRIVE | P1 job released, deadline=29, service=5
+t=  20 | ARRIVE | P3 job released, deadline=38, service=1
+t=  24 | ARRIVE | P2 job released, deadline=30, service=2
+t=  25 | FINISH | P1 job (released 20) done (on time) (deadline was 29)
+t=  27 | FINISH | P2 job (released 24) done (on time) (deadline was 30)
+t=  28 | FINISH | P3 job (released 20) done (on time) (deadline was 38)
+t=  30 | ARRIVE | P1 job released, deadline=39, service=5
+t=  30 | ARRIVE | P4 job released, deadline=55, service=1
+t=  35 | FINISH | P1 job (released 30) done (on time) (deadline was 39)
+t=  36 | FINISH | P4 job (released 30) done (on time) (deadline was 55)
+t=  36 | ARRIVE | P2 job released, deadline=42, service=2
+t=  38 | FINISH | P2 job (released 36) done (on time) (deadline was 42)
+t=  40 | ARRIVE | P1 job released, deadline=49, service=5
+t=  40 | ARRIVE | P3 job released, deadline=58, service=1
+t=  40 | ARRIVE | P5 job released, deadline=75, service=1
+t=  45 | FINISH | P1 job (released 40) done (on time) (deadline was 49)
+t=  46 | FINISH | P3 job (released 40) done (on time) (deadline was 58)
+t=  47 | FINISH | P5 job (released 40) done (on time) (deadline was 75)
+t=  48 | ARRIVE | P2 job released, deadline=54, service=2
+t=  50 | FINISH | P2 job (released 48) done (on time) (deadline was 54)
+t=  50 | ARRIVE | P1 job released, deadline=59, service=5
+t=  55 | FINISH | P1 job (released 50) done (on time) (deadline was 59)
+t=  60 | ARRIVE | P1 job released, deadline=69, service=5
+t=  60 | ARRIVE | P2 job released, deadline=66, service=2
+t=  60 | ARRIVE | P3 job released, deadline=78, service=1
+t=  60 | ARRIVE | P4 job released, deadline=85, service=1
+t=  62 | FINISH | P2 job (released 60) done (on time) (deadline was 66)
+t=  67 | FINISH | P1 job (released 60) done (on time) (deadline was 69)
+t=  68 | FINISH | P3 job (released 60) done (on time) (deadline was 78)
+t=  69 | FINISH | P4 job (released 60) done (on time) (deadline was 85)
+t=  70 | ARRIVE | P1 job released, deadline=79, service=5
+t=  72 | ARRIVE | P2 job released, deadline=78, service=2
+t=  74 | FINISH | P2 job (released 72) done (on time) (deadline was 78)
+t=  77 | FINISH | P1 job (released 70) done (on time) (deadline was 79)
+t=  80 | ARRIVE | P1 job released, deadline=89, service=5
+t=  80 | ARRIVE | P3 job released, deadline=98, service=1
+t=  80 | ARRIVE | P5 job released, deadline=115, service=1
+t=  84 | ARRIVE | P2 job released, deadline=90, service=2
+t=  85 | FINISH | P1 job (released 80) done (on time) (deadline was 89)
+t=  87 | FINISH | P2 job (released 84) done (on time) (deadline was 90)
+t=  88 | FINISH | P3 job (released 80) done (on time) (deadline was 98)
+t=  89 | FINISH | P5 job (released 80) done (on time) (deadline was 115)
+t=  90 | ARRIVE | P1 job released, deadline=99, service=5
+t=  90 | ARRIVE | P4 job released, deadline=115, service=1
+t=  95 | FINISH | P1 job (released 90) done (on time) (deadline was 99)
+t=  96 | FINISH | P4 job (released 90) done (on time) (deadline was 115)
+t=  96 | ARRIVE | P2 job released, deadline=102, service=2
+t=  98 | FINISH | P2 job (released 96) done (on time) (deadline was 102)
+t= 100 | ARRIVE | P1 job released, deadline=109, service=5
+t= 100 | ARRIVE | P3 job released, deadline=118, service=1
+t= 105 | FINISH | P1 job (released 100) done (on time) (deadline was 109)
+t= 106 | FINISH | P3 job (released 100) done (on time) (deadline was 118)
+t= 108 | ARRIVE | P2 job released, deadline=114, service=2
+t= 110 | FINISH | P2 job (released 108) done (on time) (deadline was 114)
+t= 110 | ARRIVE | P1 job released, deadline=119, service=5
+t= 115 | FINISH | P1 job (released 110) done (on time) (deadline was 119)
+t= 120 | ARRIVE | P1 job released, deadline=129, service=5
+t= 120 | ARRIVE | P2 job released, deadline=126, service=2
+t= 120 | ARRIVE | P3 job released, deadline=138, service=1
+t= 120 | ARRIVE | P4 job released, deadline=145, service=1
+t= 120 | ARRIVE | P5 job released, deadline=155, service=1
+t= 122 | FINISH | P2 job (released 120) done (on time) (deadline was 126)
+t= 127 | FINISH | P1 job (released 120) done (on time) (deadline was 129)
+t= 128 | FINISH | P3 job (released 120) done (on time) (deadline was 138)
+t= 129 | FINISH | P4 job (released 120) done (on time) (deadline was 145)
+t= 130 | FINISH | P5 job (released 120) done (on time) (deadline was 155)
+t= 130 | ARRIVE | P1 job released, deadline=139, service=5
+t= 132 | ARRIVE | P2 job released, deadline=138, service=2
+t= 134 | FINISH | P2 job (released 132) done (on time) (deadline was 138)
+t= 137 | FINISH | P1 job (released 130) done (on time) (deadline was 139)
+t= 140 | ARRIVE | P1 job released, deadline=149, service=5
+t= 140 | ARRIVE | P3 job released, deadline=158, service=1
+t= 144 | ARRIVE | P2 job released, deadline=150, service=2
+t= 145 | FINISH | P1 job (released 140) done (on time) (deadline was 149)
+t= 147 | FINISH | P2 job (released 144) done (on time) (deadline was 150)
+t= 148 | FINISH | P3 job (released 140) done (on time) (deadline was 158)
+t= 150 | ARRIVE | P1 job released, deadline=159, service=5
+t= 150 | ARRIVE | P4 job released, deadline=175, service=1
+t= 155 | FINISH | P1 job (released 150) done (on time) (deadline was 159)
+t= 156 | FINISH | P4 job (released 150) done (on time) (deadline was 175)
+t= 156 | ARRIVE | P2 job released, deadline=162, service=2
+t= 158 | FINISH | P2 job (released 156) done (on time) (deadline was 162)
+t= 160 | ARRIVE | P1 job released, deadline=169, service=5
+t= 160 | ARRIVE | P3 job released, deadline=178, service=1
+t= 160 | ARRIVE | P5 job released, deadline=195, service=1
+t= 165 | FINISH | P1 job (released 160) done (on time) (deadline was 169)
+t= 166 | FINISH | P3 job (released 160) done (on time) (deadline was 178)
+t= 167 | FINISH | P5 job (released 160) done (on time) (deadline was 195)
+t= 168 | ARRIVE | P2 job released, deadline=174, service=2
+t= 170 | FINISH | P2 job (released 168) done (on time) (deadline was 174)
+t= 170 | ARRIVE | P1 job released, deadline=179, service=5
+t= 175 | FINISH | P1 job (released 170) done (on time) (deadline was 179)
+t= 180 | ARRIVE | P1 job released, deadline=189, service=5
+t= 180 | ARRIVE | P2 job released, deadline=186, service=2
+t= 180 | ARRIVE | P3 job released, deadline=198, service=1
+t= 180 | ARRIVE | P4 job released, deadline=205, service=1
+t= 182 | FINISH | P2 job (released 180) done (on time) (deadline was 186)
+t= 187 | FINISH | P1 job (released 180) done (on time) (deadline was 189)
+t= 188 | FINISH | P3 job (released 180) done (on time) (deadline was 198)
+t= 189 | FINISH | P4 job (released 180) done (on time) (deadline was 205)
+t= 190 | ARRIVE | P1 job released, deadline=199, service=5
+t= 192 | ARRIVE | P2 job released, deadline=198, service=2
+t= 194 | FINISH | P2 job (released 192) done (on time) (deadline was 198)
+t= 197 | FINISH | P1 job (released 190) done (on time) (deadline was 199)
+t= 200 | ARRIVE | P1 job released, deadline=209, service=5
+t= 200 | ARRIVE | P3 job released, deadline=218, service=1
+t= 200 | ARRIVE | P5 job released, deadline=235, service=1
+t= 204 | ARRIVE | P2 job released, deadline=210, service=2
+t= 205 | FINISH | P1 job (released 200) done (on time) (deadline was 209)
+t= 207 | FINISH | P2 job (released 204) done (on time) (deadline was 210)
+t= 208 | FINISH | P3 job (released 200) done (on time) (deadline was 218)
+t= 209 | FINISH | P5 job (released 200) done (on time) (deadline was 235)
+t= 210 | ARRIVE | P1 job released, deadline=219, service=5
+t= 210 | ARRIVE | P4 job released, deadline=235, service=1
+t= 215 | FINISH | P1 job (released 210) done (on time) (deadline was 219)
+t= 216 | FINISH | P4 job (released 210) done (on time) (deadline was 235)
+t= 216 | ARRIVE | P2 job released, deadline=222, service=2
+t= 218 | FINISH | P2 job (released 216) done (on time) (deadline was 222)
+t= 220 | ARRIVE | P1 job released, deadline=229, service=5
+t= 220 | ARRIVE | P3 job released, deadline=238, service=1
+t= 225 | FINISH | P1 job (released 220) done (on time) (deadline was 229)
+t= 226 | FINISH | P3 job (released 220) done (on time) (deadline was 238)
+t= 228 | ARRIVE | P2 job released, deadline=234, service=2
+t= 230 | FINISH | P2 job (released 228) done (on time) (deadline was 234)
+t= 230 | ARRIVE | P1 job released, deadline=239, service=5
+t= 235 | FINISH | P1 job (released 230) done (on time) (deadline was 239)
+t= 240 | ARRIVE | P1 job released, deadline=249, service=5
+t= 240 | ARRIVE | P2 job released, deadline=246, service=2
+t= 240 | ARRIVE | P3 job released, deadline=258, service=1
+t= 240 | ARRIVE | P4 job released, deadline=265, service=1
+t= 240 | ARRIVE | P5 job released, deadline=275, service=1
+t= 242 | FINISH | P2 job (released 240) done (on time) (deadline was 246)
+t= 247 | FINISH | P1 job (released 240) done (on time) (deadline was 249)
+t= 248 | FINISH | P3 job (released 240) done (on time) (deadline was 258)
+t= 249 | FINISH | P4 job (released 240) done (on time) (deadline was 265)
+t= 250 | FINISH | P5 job (released 240) done (on time) (deadline was 275)
+t= 250 | ARRIVE | P1 job released, deadline=259, service=5
+t= 252 | ARRIVE | P2 job released, deadline=258, service=2
+t= 254 | FINISH | P2 job (released 252) done (on time) (deadline was 258)
+t= 257 | FINISH | P1 job (released 250) done (on time) (deadline was 259)
+t= 260 | ARRIVE | P1 job released, deadline=269, service=5
+t= 260 | ARRIVE | P3 job released, deadline=278, service=1
+t= 264 | ARRIVE | P2 job released, deadline=270, service=2
+t= 265 | FINISH | P1 job (released 260) done (on time) (deadline was 269)
+t= 267 | FINISH | P2 job (released 264) done (on time) (deadline was 270)
+t= 268 | FINISH | P3 job (released 260) done (on time) (deadline was 278)
+t= 270 | ARRIVE | P1 job released, deadline=279, service=5
+t= 270 | ARRIVE | P4 job released, deadline=295, service=1
+t= 275 | FINISH | P1 job (released 270) done (on time) (deadline was 279)
+t= 276 | FINISH | P4 job (released 270) done (on time) (deadline was 295)
+t= 276 | ARRIVE | P2 job released, deadline=282, service=2
+t= 278 | FINISH | P2 job (released 276) done (on time) (deadline was 282)
+t= 280 | ARRIVE | P1 job released, deadline=289, service=5
+t= 280 | ARRIVE | P3 job released, deadline=298, service=1
+t= 280 | ARRIVE | P5 job released, deadline=315, service=1
+t= 285 | FINISH | P1 job (released 280) done (on time) (deadline was 289)
+t= 286 | FINISH | P3 job (released 280) done (on time) (deadline was 298)
+t= 287 | FINISH | P5 job (released 280) done (on time) (deadline was 315)
+t= 288 | ARRIVE | P2 job released, deadline=294, service=2
+t= 290 | FINISH | P2 job (released 288) done (on time) (deadline was 294)
+t= 290 | ARRIVE | P1 job released, deadline=299, service=5
+t= 295 | FINISH | P1 job (released 290) done (on time) (deadline was 299)
+t= 300 | ARRIVE | P1 job released, deadline=309, service=5
+t= 300 | ARRIVE | P2 job released, deadline=306, service=2
+t= 300 | ARRIVE | P3 job released, deadline=318, service=1
+t= 300 | ARRIVE | P4 job released, deadline=325, service=1
+t= 302 | FINISH | P2 job (released 300) done (on time) (deadline was 306)
+t= 307 | FINISH | P1 job (released 300) done (on time) (deadline was 309)
+t= 308 | FINISH | P3 job (released 300) done (on time) (deadline was 318)
+t= 309 | FINISH | P4 job (released 300) done (on time) (deadline was 325)
+t= 310 | ARRIVE | P1 job released, deadline=319, service=5
+t= 312 | ARRIVE | P2 job released, deadline=318, service=2
+t= 314 | FINISH | P2 job (released 312) done (on time) (deadline was 318)
+t= 317 | FINISH | P1 job (released 310) done (on time) (deadline was 319)
+t= 320 | ARRIVE | P1 job released, deadline=329, service=5
+t= 320 | ARRIVE | P3 job released, deadline=338, service=1
+t= 320 | ARRIVE | P5 job released, deadline=355, service=1
+t= 324 | ARRIVE | P2 job released, deadline=330, service=2
+t= 325 | FINISH | P1 job (released 320) done (on time) (deadline was 329)
+t= 327 | FINISH | P2 job (released 324) done (on time) (deadline was 330)
+t= 328 | FINISH | P3 job (released 320) done (on time) (deadline was 338)
+t= 329 | FINISH | P5 job (released 320) done (on time) (deadline was 355)
+t= 330 | ARRIVE | P1 job released, deadline=339, service=5
+t= 330 | ARRIVE | P4 job released, deadline=355, service=1
+t= 335 | FINISH | P1 job (released 330) done (on time) (deadline was 339)
+t= 336 | FINISH | P4 job (released 330) done (on time) (deadline was 355)
+t= 336 | ARRIVE | P2 job released, deadline=342, service=2
+t= 338 | FINISH | P2 job (released 336) done (on time) (deadline was 342)
+t= 340 | ARRIVE | P1 job released, deadline=349, service=5
+t= 340 | ARRIVE | P3 job released, deadline=358, service=1
+t= 345 | FINISH | P1 job (released 340) done (on time) (deadline was 349)
+t= 346 | FINISH | P3 job (released 340) done (on time) (deadline was 358)
+t= 348 | ARRIVE | P2 job released, deadline=354, service=2
+t= 350 | FINISH | P2 job (released 348) done (on time) (deadline was 354)
+t= 350 | ARRIVE | P1 job released, deadline=359, service=5
+t= 355 | FINISH | P1 job (released 350) done (on time) (deadline was 359)
+t= 360 | ARRIVE | P1 job released, deadline=369, service=5
+t= 360 | ARRIVE | P2 job released, deadline=366, service=2
+t= 360 | ARRIVE | P3 job released, deadline=378, service=1
+t= 360 | ARRIVE | P4 job released, deadline=385, service=1
+t= 360 | ARRIVE | P5 job released, deadline=395, service=1
+t= 362 | FINISH | P2 job (released 360) done (on time) (deadline was 366)
+t= 367 | FINISH | P1 job (released 360) done (on time) (deadline was 369)
+t= 368 | FINISH | P3 job (released 360) done (on time) (deadline was 378)
+t= 369 | FINISH | P4 job (released 360) done (on time) (deadline was 385)
+t= 370 | FINISH | P5 job (released 360) done (on time) (deadline was 395)
+t= 370 | ARRIVE | P1 job released, deadline=379, service=5
+t= 372 | ARRIVE | P2 job released, deadline=378, service=2
+t= 374 | FINISH | P2 job (released 372) done (on time) (deadline was 378)
+t= 377 | FINISH | P1 job (released 370) done (on time) (deadline was 379)
+t= 380 | ARRIVE | P1 job released, deadline=389, service=5
+t= 380 | ARRIVE | P3 job released, deadline=398, service=1
+t= 384 | ARRIVE | P2 job released, deadline=390, service=2
+t= 385 | FINISH | P1 job (released 380) done (on time) (deadline was 389)
+t= 387 | FINISH | P2 job (released 384) done (on time) (deadline was 390)
+t= 388 | FINISH | P3 job (released 380) done (on time) (deadline was 398)
+t= 390 | ARRIVE | P1 job released, deadline=399, service=5
+t= 390 | ARRIVE | P4 job released, deadline=415, service=1
+t= 395 | FINISH | P1 job (released 390) done (on time) (deadline was 399)
+t= 396 | FINISH | P4 job (released 390) done (on time) (deadline was 415)
+t= 396 | ARRIVE | P2 job released, deadline=402, service=2
+t= 398 | FINISH | P2 job (released 396) done (on time) (deadline was 402)
+t= 400 | ARRIVE | P1 job released, deadline=409, service=5
+t= 400 | ARRIVE | P3 job released, deadline=418, service=1
+t= 400 | ARRIVE | P5 job released, deadline=435, service=1
+t= 405 | FINISH | P1 job (released 400) done (on time) (deadline was 409)
+t= 406 | FINISH | P3 job (released 400) done (on time) (deadline was 418)
+t= 407 | FINISH | P5 job (released 400) done (on time) (deadline was 435)
+t= 408 | ARRIVE | P2 job released, deadline=414, service=2
+t= 410 | FINISH | P2 job (released 408) done (on time) (deadline was 414)
+t= 410 | ARRIVE | P1 job released, deadline=419, service=5
+t= 415 | FINISH | P1 job (released 410) done (on time) (deadline was 419)
+t= 420 | ARRIVE | P1 job released, deadline=429, service=5
+t= 420 | ARRIVE | P2 job released, deadline=426, service=2
+t= 420 | ARRIVE | P3 job released, deadline=438, service=1
+t= 420 | ARRIVE | P4 job released, deadline=445, service=1
+t= 422 | FINISH | P2 job (released 420) done (on time) (deadline was 426)
+t= 427 | FINISH | P1 job (released 420) done (on time) (deadline was 429)
+t= 428 | FINISH | P3 job (released 420) done (on time) (deadline was 438)
+t= 429 | FINISH | P4 job (released 420) done (on time) (deadline was 445)
+t= 430 | ARRIVE | P1 job released, deadline=439, service=5
+t= 432 | ARRIVE | P2 job released, deadline=438, service=2
+t= 434 | FINISH | P2 job (released 432) done (on time) (deadline was 438)
+t= 437 | FINISH | P1 job (released 430) done (on time) (deadline was 439)
+t= 440 | ARRIVE | P1 job released, deadline=449, service=5
+t= 440 | ARRIVE | P3 job released, deadline=458, service=1
+t= 440 | ARRIVE | P5 job released, deadline=475, service=1
+t= 444 | ARRIVE | P2 job released, deadline=450, service=2
+t= 445 | FINISH | P1 job (released 440) done (on time) (deadline was 449)
+t= 447 | FINISH | P2 job (released 444) done (on time) (deadline was 450)
+t= 448 | FINISH | P3 job (released 440) done (on time) (deadline was 458)
+t= 449 | FINISH | P5 job (released 440) done (on time) (deadline was 475)
+t= 450 | ARRIVE | P1 job released, deadline=459, service=5
+t= 450 | ARRIVE | P4 job released, deadline=475, service=1
+t= 455 | FINISH | P1 job (released 450) done (on time) (deadline was 459)
+t= 456 | FINISH | P4 job (released 450) done (on time) (deadline was 475)
+t= 456 | ARRIVE | P2 job released, deadline=462, service=2
+t= 458 | FINISH | P2 job (released 456) done (on time) (deadline was 462)
+t= 460 | ARRIVE | P1 job released, deadline=469, service=5
+t= 460 | ARRIVE | P3 job released, deadline=478, service=1
+t= 465 | FINISH | P1 job (released 460) done (on time) (deadline was 469)
+t= 466 | FINISH | P3 job (released 460) done (on time) (deadline was 478)
+t= 468 | ARRIVE | P2 job released, deadline=474, service=2
+t= 470 | FINISH | P2 job (released 468) done (on time) (deadline was 474)
+t= 470 | ARRIVE | P1 job released, deadline=479, service=5
+t= 475 | FINISH | P1 job (released 470) done (on time) (deadline was 479)
+t= 480 | ARRIVE | P1 job released, deadline=489, service=5
+t= 480 | ARRIVE | P2 job released, deadline=486, service=2
+t= 480 | ARRIVE | P3 job released, deadline=498, service=1
+t= 480 | ARRIVE | P4 job released, deadline=505, service=1
+t= 480 | ARRIVE | P5 job released, deadline=515, service=1
+t= 482 | FINISH | P2 job (released 480) done (on time) (deadline was 486)
+t= 487 | FINISH | P1 job (released 480) done (on time) (deadline was 489)
+t= 488 | FINISH | P3 job (released 480) done (on time) (deadline was 498)
+t= 489 | FINISH | P4 job (released 480) done (on time) (deadline was 505)
+t= 490 | FINISH | P5 job (released 480) done (on time) (deadline was 515)
+t= 490 | ARRIVE | P1 job released, deadline=499, service=5
+t= 492 | ARRIVE | P2 job released, deadline=498, service=2
+t= 494 | FINISH | P2 job (released 492) done (on time) (deadline was 498)
+t= 497 | FINISH | P1 job (released 490) done (on time) (deadline was 499)
+
+--- Summary ---
+EDF Results:
+
+Schedule feasible for the entire simulated window (0 to 500 units). No deadlines missed. CPU time took 389 units (77.8% utilization).
+
+Process 1: Arrival Time: 0, Service: 5, Relative Deadline: 9, Period: 10, finish: 7, 17, 25, 35, 45, 55, 67, 77, 85, 95, 105, 115, 127, 137, 145, 155, 165, 175, 187, 197, 205, 215, 225, 235, 247, 257, 265, 275, 285, 295, 307, 317, 325, 335, 345, 355, 367, 377, 385, 395, 405, 415, 427, 437, 445, 455, 465, 475, 487, 497.
+Process 2: Arrival Time: 0, Service: 2, Relative Deadline: 6, Period: 12, finish: 2, 14, 27, 38, 50, 62, 74, 87, 98, 110, 122, 134, 147, 158, 170, 182, 194, 207, 218, 230, 242, 254, 267, 278, 290, 302, 314, 327, 338, 350, 362, 374, 387, 398, 410, 422, 434, 447, 458, 470, 482, 494.
+Process 3: Arrival Time: 0, Service: 1, Relative Deadline: 18, Period: 20, finish: 8, 28, 46, 68, 88, 106, 128, 148, 166, 188, 208, 226, 248, 268, 286, 308, 328, 346, 368, 388, 406, 428, 448, 466, 488.
+Process 4: Arrival Time: 0, Service: 1, Relative Deadline: 25, Period: 30, finish: 9, 36, 69, 96, 129, 156, 189, 216, 249, 276, 309, 336, 369, 396, 429, 456, 489.
+Process 5: Arrival Time: 0, Service: 1, Relative Deadline: 35, Period: 40, finish: 10, 47, 89, 130, 167, 209, 250, 287, 329, 370, 407, 449, 490.
+
