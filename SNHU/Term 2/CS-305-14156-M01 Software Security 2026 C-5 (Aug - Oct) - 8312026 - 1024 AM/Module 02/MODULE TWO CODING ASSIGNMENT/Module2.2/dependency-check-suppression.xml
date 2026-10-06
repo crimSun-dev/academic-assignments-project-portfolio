@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+
+    <!--
+      Place this file at Module2.2/dependency-check-suppression.xml
+      (same folder as pom.xml).
+
+      IMPORTANT: every suppression below is a TEMPLATE. Do not enable one
+      until you have opened the CVE on nvd.nist.gov, read the affected-version
+      range, and confirmed it does not apply. Then fill in the <notes> with
+      who verified it and when. An unjustified suppression is worse than an
+      unfiltered false positive, because it hides the finding permanently.
+
+      Uncomment a block to activate it.
+    -->
+
+    <!--
+    CPE confusion: dependency-check maps the mongo-java-driver CLIENT jar onto
+    cpe:2.3:a:mongodb:mongodb, the identifier for the MongoDB database SERVER.
+    Server-side CVEs are therefore attributed to a library that never runs the
+    server. Suppress the server CPE only, so any CVE genuinely filed against
+    the Java driver still surfaces.
+
+    NOTE: this does NOT make mongo-java-driver 2.4 safe. It was published in
+    December 2010 and is unmaintained; it should be replaced with
+    mongodb-driver-sync regardless.
+    -->
+    <!--
+    <suppress>
+        <notes><![CDATA[
+            FALSE POSITIVE - CPE confusion. mongo-java-driver is the Java client
+            library, not the mongod server binary. Verified against NVD affected
+            configurations for the matched CVEs on <DATE> by <YOUR NAME>.
+            Tracking replacement with mongodb-driver-sync separately.
+        ]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.mongodb/mongo\-java\-driver@.*$</packageUrl>
+        <cpe>cpe:/a:mongodb:mongodb</cpe>
+    </suppress>
+    -->
+
+    <!--
+    Version-range mismatch template: suppress ONE cve on ONE artifact when the
+    resolved version sits outside the CVE's affected range.
+    -->
+    <!--
+    <suppress>
+        <notes><![CDATA[
+            NOT APPLICABLE - CVE affects versions < X.Y.Z; this build resolves
+            A.B.C. Verified on the NVD affected-configuration list on <DATE>
+            by <YOUR NAME>.
+        ]]></notes>
+        <packageUrl regex="true">^pkg:maven/GROUP/ARTIFACT@.*$</packageUrl>
+        <cve>CVE-YYYY-NNNNN</cve>
+    </suppress>
+    -->
+
+    <!--
+    Non-reachable code path template: the vulnerable feature is not used and
+    cannot be enabled by an attacker. Requires a code-level justification.
+    -->
+    <!--
+    <suppress until="2027-01-01Z">
+        <notes><![CDATA[
+            NOT EXPLOITABLE - the application never enables <FEATURE>, which the
+            CVE requires. Time-boxed suppression: re-evaluate before the until
+            date. Reviewed <DATE> by <YOUR NAME>.
+        ]]></notes>
+        <packageUrl regex="true">^pkg:maven/GROUP/ARTIFACT@.*$</packageUrl>
+        <cve>CVE-YYYY-NNNNN</cve>
+    </suppress>
+    -->
+
+</suppressions>

@@ -4,6 +4,8 @@ Portfolio of **assignment and project submission files** only (course lectures, 
 
 ## Structure
 
-- `SNHU/` â€” SNHU assignment & project work
-- `Sophia/` â€” Sophia Touchstones / projects
-- `StudyCom/` â€” Study.com required assignments
+- `SNHU/` - SNHU assignment & project work
+  - `Term 1/` - CS-210 Programming Languages, MAT-350 Applied Linear Algebra
+  - `Term 2/` - CS-300 DSA: Analysis and Design, CS-305 Software Security
+- `Sophia/` - Sophia Touchstones / projects
+- `StudyCom/` - Study.com required assignments

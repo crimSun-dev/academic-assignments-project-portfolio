@@ -1,0 +1,134 @@
+{
+  "revision": 1,
+  "updated": "2026-09-25",
+  "root": "G:\\Draven's Very Important Files\\Workspace\\SNHU Courses\\Term 2\\CS-305-14156-M01 Software Security 2026 C-5 (Aug - Oct) - 8312026 - 1024 AM\\Module 05\\Coding Assignment Checksum Verification",
+  "signals": {
+    "files_seen": 8,
+    "top_level_dirs": [
+      ".kilo",
+      "Codebase",
+      "Java Security Standard Algorithm Names_files"
+    ],
+    "top_extensions": [
+      [
+        "download",
+        2
+      ],
+      [
+        "html",
+        1
+      ],
+      [
+        "docx",
+        1
+      ],
+      [
+        ".gitignore",
+        1
+      ],
+      [
+        "css",
+        1
+      ],
+      [
+        "2872571",
+        1
+      ],
+      [
+        "notice",
+        1
+      ]
+    ],
+    "manifests": []
+  },
+  "roles": [
+    {
+      "slug": "application-security-engineer",
+      "role": "Application Security Engineer",
+      "invoke": "/agency-role-application-security-engineer",
+      "status": "core",
+      "score": 4.0,
+      "why": "CS-305 checksum assignment: collision-resistant hash so a public key download cannot be swapped for a malicious file. Evidence: Java Security Standard Algorithm Names.html.",
+      "added": "2026-09-25",
+      "last_seen": "2026-09-25"
+    },
+    {
+      "slug": "backend-architect",
+      "role": "Backend Architect",
+      "invoke": "/agency-role-backend-architect",
+      "status": "core",
+      "score": 3.0,
+      "why": "Java MessageDigest plus a @RequestMapping route that returns the name string, cipher, and hex checksum. Named in the assignment; Codebase/ has no .java sources yet.",
+      "added": "2026-09-25",
+      "last_seen": "2026-09-25"
+    },
+    {
+      "slug": "security-architect",
+      "role": "Security Architect",
+      "invoke": "/agency-role-security-architect",
+      "status": "core",
+      "score": 3.0,
+      "why": "Algorithm choice that avoids collisions (Oracle standard names, not a broken hash). Evidence: Java Security Standard Algorithm Names.html.",
+      "added": "2026-09-25",
+      "last_seen": "2026-09-25"
+    },
+    {
+      "slug": "api-platform-engineer",
+      "role": "Api Platform Engineer",
+      "invoke": "/agency-role-api-platform-engineer",
+      "status": "supporting",
+      "score": 2.0,
+      "why": "One REST route returns the checksum payload to the browser. Assignment directions; not a multi-API platform.",
+      "added": "2026-09-25",
+      "last_seen": "2026-09-25"
+    },
+    {
+      "slug": "technical-writer",
+      "role": "Technical Writer",
+      "invoke": "/agency-role-technical-writer",
+      "status": "supporting",
+      "score": 2.0,
+      "why": "Module Five template: cipher recommendation, collision justification, APA sources, and a verification screenshot.",
+      "added": "2026-09-25",
+      "last_seen": "2026-09-25"
+    },
+    {
+      "slug": "code-reviewer",
+      "role": "Code Reviewer",
+      "invoke": "/agency-role-code-reviewer",
+      "status": "supporting",
+      "score": 2.0,
+      "why": "Refactored checksum code is an instructor-reviewed deliverable. No .java files in the tree yet.",
+      "added": "2026-09-25",
+      "last_seen": "2026-09-25"
+    },
+    {
+      "slug": "api-tester",
+      "role": "Api Tester",
+      "invoke": "/agency-role-api-tester",
+      "status": "supporting",
+      "score": 2.0,
+      "why": "Verification step: browser hits the REST server and shows name, cipher, and hash.",
+      "added": "2026-09-25",
+      "last_seen": "2026-09-25"
+    }
+  ],
+  "changelog": [
+    {
+      "revision": 1,
+      "date": "2026-09-25",
+      "added": [
+        "application-security-engineer",
+        "backend-architect",
+        "security-architect",
+        "api-platform-engineer",
+        "technical-writer",
+        "code-reviewer",
+        "api-tester"
+      ],
+      "retired": [],
+      "files_seen": 8,
+      "note": "Judgment pass dropped lexical false positives (Drupal, WordPress, podcast, medical billing, blockchain, frontend CSS from the saved Oracle page)."
+    }
+  ]
+}

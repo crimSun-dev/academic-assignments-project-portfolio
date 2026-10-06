@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  OWASP Dependency-Check suppression file.
+
+  Nothing is suppressed. The file is wired into the build deliberately so that when a
+  finding is genuinely a false positive, the suppression is reviewed and justified here
+  in source control rather than by silently lowering the failure threshold.
+
+  Every suppression must carry a <notes> entry stating who validated it and when.
+-->
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+</suppressions>
